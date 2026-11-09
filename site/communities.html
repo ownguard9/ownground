@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Communities — OwnGround</title>
+<link rel="stylesheet" href="styles.css">
+<script src="config.js"></script>
+<script src="fastnear-wallet.bundle.js"></script>
+<script src="failure.js"></script>
+<script src="common.js"></script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="index.html"><span data-brand>OwnGround</span></a>
+  <nav>
+    <a href="communities.html">Communities</a>
+    <a href="index.html#how">How it works</a>
+  </nav>
+  <button id="connectBtn" onclick="toggleWallet()">Connect wallet</button>
+</header>
+<main>
+  <p id="pageStatus"></p>
+  <h1>Communities</h1>
+  <p class="lede">Every community owns its assets together, governs through its own DAO,
+  and publishes its full financial history onchain.</p>
+  <div id="notDeployed" class="panel" style="display:none">
+    <p>The contract is not deployed yet. Communities will appear here once it is live on testnet.</p>
+  </div>
+  <div id="stats" class="grid"></div>
+  <div id="list"></div>
+
+  <h2>Create a community</h2>
+  <div class="panel">
+    <p class="muted small">First create a Sputnik DAO for the community, then register it here.
+    Membership is fixed at creation and cannot change later. The founding policies below are set at creation; later changes go through a two-step amendment (propose, wait the timelock, execute). Creating a community attaches 0.1 NEAR for storage.</p>
+    <label>Community name<input id="cName" placeholder="Lagos Energy Cooperative"></label>
+    <label>Description<input id="cDesc" placeholder="What the community owns together"></label>
+    <label>DAO account<input id="cDao" placeholder="lagos-energy.sputnikv2.testnet"></label>
+    <label>Members, one NEAR account per line<textarea id="cMembers" rows="4" placeholder="alice.testnet&#10;bob.testnet"></textarea></label>
+    <h3>Founding distribution policy</h3>
+    <label>Members percent<input id="cPolMembers" value="60"></label>
+    <label>Treasury retention percent<input id="cPolTreasury" value="25"></label>
+    <label>Maintenance percent<input id="cPolMaint" value="15"></label>
+    <label>Activity share of the member pool, percent<input id="cPolActivity" value="10"></label>
+    <h3>Founding spending policy</h3>
+    <label>Max single expense in NEAR, 0 means no cap<input id="cSpCap" value="1"></label>
+    <label>Minimum treasury reserve in NEAR<input id="cSpReserve" value="1"></label>
+    <label>Allowed categories, comma separated<input id="cSpCats" value="maintenance, operations"></label>
+    <h3>Founding activity policy</h3>
+    <label>Capital points per whole NEAR contributed<input id="cActCapital" value="1"></label>
+    <label>Work points per verified revenue entry<input id="cActRecord" value="1"></label>
+    <label>Work points per whole NEAR of verified revenue<input id="cActNear" value="1"></label>
+    <button id="createBtn" onclick="createCommunity()">Create community</button>
+    <p class="small muted">The community id is made from the name. Connect a wallet first.</p>
+  </div>
+</main>
+<footer><span data-brand>OwnGround</span> runs on NEAR testnet.</footer>
+<script>
+function slugify(name) {
+  return String(name || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
+}
+async function load() {
+  if (!deployed()) { el("notDeployed").style.display = ""; return; }
+  try {
+    const stats = await view("get_stats", {});
+    el("stats").innerHTML =
+      '<div class="card"><div class="label">Communities</div><div class="big">' + stats.community_count + '</div></div>' +
+      '<div class="card"><div class="label">Assets</div><div class="big">' + stats.asset_count + '</div></div>' +
+      '<div class="card"><div class="label">Total revenue</div><div class="big">' + fmtYocto(stats.total_revenue) + ' NEAR</div></div>' +
+      '<div class="card"><div class="label">Total payouts</div><div class="big">' + fmtYocto(stats.total_payouts) + ' NEAR</div></div>';
+    const ids = await view("list_communities", {});
+    let html = "";
+    for (const id of ids) {
+      const c = await view("get_community", { community_id: id });
+      const t = await view("get_treasury", { community_id: id });
+      html += '<div class="panel"><h3><a href="community.html?id=' + escapeHtml(id) + '">' + escapeHtml(c.name) + '</a></h3>' +
+        '<p class="muted">' + escapeHtml(c.description || "") + '</p>' +
+        '<p class="small">Members: ' + c.members.map(escapeHtml).join(", ") + '<br>' +
+        'Treasury: ' + fmtYocto(t.treasury) + ' NEAR &nbsp; Locked: ' + fmtYocto(t.locked) + ' NEAR &nbsp; DAO: ' + escapeHtml(c.dao_id) + '</p></div>';
+    }
+    el("list").innerHTML = html || '<p class="muted">No communities yet.</p>';
+  } catch (e) { pageStatus("Could not load communities: " + String(e.message).slice(0, 200)); }
+}
+async function createCommunity() {
+  if (!walletAccountId) { pageStatus("Connect a wallet first."); return; }
+  const name = el("cName").value.trim();
+  const dao = el("cDao").value.trim();
+  const members = el("cMembers").value.split(/\n+/).map((s) => s.trim()).filter(Boolean);
+  if (!name || !dao || members.length === 0) { pageStatus("Name, DAO account and at least one member are required."); return; }
+  const m = Number(el("cPolMembers").value);
+  const t = Number(el("cPolTreasury").value);
+  const mn = Number(el("cPolMaint").value);
+  const a = Number(el("cPolActivity").value);
+  if ([m, t, mn, a].some((x) => Number.isNaN(x) || x < 0 || x > 100) || m + t + mn !== 100) {
+    pageStatus("Members, retention and maintenance must be percents that sum to 100.");
+    return;
+  }
+  const cap = nearToYocto(el("cSpCap").value);
+  const reserve = nearToYocto(el("cSpReserve").value);
+  const cats = el("cSpCats").value.split(",").map((s) => s.trim()).filter(Boolean);
+  if (!cats.length) { pageStatus("List at least one allowed spending category."); return; }
+  const btn = el("createBtn");
+  btn.disabled = true;
+  btn.textContent = "Creating…";
+  try {
+    await walletCall(contractId(), "create_community", {
+      id: slugify(name),
+      name: name,
+      description: el("cDesc").value.trim(),
+      dao_id: dao,
+      members: members,
+      distribution_policy: {
+        members_bp: Math.round(m * 100), treasury_bp: Math.round(t * 100),
+        maintenance_bp: Math.round(mn * 100), activity_bp: Math.round(a * 100),
+      },
+      spending_policy: {
+        max_single_expense: cap.toString(),
+        min_treasury_reserve: reserve.toString(),
+        allowed_categories: cats,
+      },
+      activity_policy: {
+        capital_per_near: Math.round(Number(el("cActCapital").value)),
+        work_per_revenue_record: Math.round(Number(el("cActRecord").value)),
+        work_per_revenue_near: Math.round(Number(el("cActNear").value)),
+      },
+      dispute_window_ns: null,
+      timelock_ns: null,
+    }, window.STORAGE.createCommunity, window.GAS_100);
+    pageStatus("Community creation sent. Wait for the wallet to confirm, then reload.");
+  } catch (e) { reportFailure(e); }
+  btn.disabled = false;
+  btn.textContent = "Create community";
+}
+window.owngroundWalletChanged = load;
+initWallet();
+load();
+</script>
+</body>
+</html>

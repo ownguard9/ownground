@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Community — OwnGround</title>
+<link rel="stylesheet" href="styles.css">
+<script src="config.js"></script>
+<script src="fastnear-wallet.bundle.js"></script>
+<script src="failure.js"></script>
+<script src="common.js"></script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="index.html"><span data-brand>OwnGround</span></a>
+  <nav>
+    <a href="communities.html">Communities</a>
+    <a href="index.html#how">How it works</a>
+  </nav>
+  <button id="connectBtn" onclick="toggleWallet()">Connect wallet</button>
+</header>
+<main>
+  <p id="pageStatus"></p>
+  <div id="notDeployed" class="panel" style="display:none">
+    <p>The contract is not deployed yet. This page will load once it is live on testnet.</p>
+  </div>
+  <div id="content" style="display:none">
+    <h1 id="cName"></h1>
+    <p class="muted" id="cMeta"></p>
+
+    <h2>Treasury</h2>
+    <p class="muted small">Each figure is separate. Acquisition value, treasury balance and realised revenue are never combined into one total.</p>
+    <div class="grid" id="treasuryCards"></div>
+
+    <h2>Where this community stands</h2>
+    <ol class="flow" id="flowSteps"></ol>
+
+    <h2>Funding campaigns</h2>
+    <div id="campaigns"></div>
+    <div class="panel">
+      <h3>Start a campaign</h3>
+      <label>Asset name<input id="campName" placeholder="Commercial generator"></label>
+      <label>Category<input id="campCat" placeholder="energy"></label>
+      <label>Target in NEAR<input id="campTarget" placeholder="10"></label>
+      <label>Deadline<input id="campDeadline" type="date"></label>
+      <button onclick="createCampaign()">Start campaign</button>
+      <p class="small muted">Starting a campaign attaches 0.05 NEAR for storage. You must be a member.</p>
+    </div>
+
+    <h2>Assets</h2>
+    <div id="assets"></div>
+
+    <h2>Governance</h2>
+    <div class="panel">
+      <p>All spending is approved by the community DAO. Proposals live on the DAO itself.</p>
+      <p><a id="daoLink" href="#" target="_blank" rel="noopener">Open the DAO proposals</a></p>
+      <h3>Propose a distribution policy change</h3>
+      <p class="small muted">Shares must sum to 100. The activity share is a slice of the member pool, split by verified work points instead of ownership. A change is proposed here, waits out the timelock, and then anyone can execute it. The old policy stays in force until then.</p>
+      <label>Members percent<input id="polMembers" value="60"></label>
+      <label>Treasury retention percent<input id="polTreasury" value="25"></label>
+      <label>Maintenance percent<input id="polMaint" value="15"></label>
+      <label>Activity share of the member pool, percent<input id="polActivity" value="10"></label>
+      <button onclick="proposePolicy()">Propose policy change</button>
+      <p class="small">Current policy: <span id="curPolicy">none set yet</span></p>
+      <h3>Propose a spending policy change</h3>
+      <p class="small muted">The DAO sets a cap on single expenses, a minimum treasury reserve and the allowed categories. An expense outside the policy is rejected before any transfer, even a DAO approved one. Acquisitions are not capped. Changes go through the same propose, wait, execute flow.</p>
+      <label>Max single expense in NEAR, 0 means no cap<input id="spCap" value="1"></label>
+      <label>Minimum treasury reserve in NEAR<input id="spReserve" value="1"></label>
+      <label>Allowed categories, comma separated<input id="spCats" value="maintenance, operations"></label>
+      <button onclick="proposeSpendingPolicy()">Propose spending policy change</button>
+      <p class="small">Current spending policy: <span id="curSpending">none set yet</span></p>
+      <h3>Policy amendment history</h3>
+      <div id="amendments"></div>
+    </div>
+    </div>
+  </div>
+</main>
+<footer><span data-brand>OwnGround</span> runs on NEAR testnet.</footer>
+<script src="community.js"></script>
+<script>
+initWallet();
+loadCommunity();
+</script>
+</body>
+</html>

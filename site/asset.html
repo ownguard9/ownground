@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Asset — OwnGround</title>
+<link rel="stylesheet" href="styles.css">
+<script src="config.js"></script>
+<script src="fastnear-wallet.bundle.js"></script>
+<script src="failure.js"></script>
+<script src="common.js"></script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="index.html"><span data-brand>OwnGround</span></a>
+  <nav>
+    <a href="communities.html">Communities</a>
+    <a href="index.html#how">How it works</a>
+  </nav>
+  <button id="connectBtn" onclick="toggleWallet()">Connect wallet</button>
+</header>
+<main>
+  <p id="pageStatus"></p>
+  <div id="notDeployed" class="panel" style="display:none">
+    <p>The contract is not deployed yet. This page will load once it is live on testnet.</p>
+  </div>
+  <div id="content" style="display:none">
+    <h1 id="aName"></h1>
+    <p class="muted" id="aMeta"></p>
+    <p><a id="backLink" href="#">Back to the community</a></p>
+
+    <h2>Value and revenue</h2>
+    <p class="muted small">Acquisition value, treasury balance and realised revenue are separate figures, never combined into one total.</p>
+    <div class="grid" id="assetCards"></div>
+
+    <h2>Revenue</h2>
+    <div id="revenueList"></div>
+    <div class="panel">
+      <h3>Record revenue</h3>
+      <p class="small muted">Onchain revenue attaches the amount plus 0.01 NEAR for storage and is verified at once. Reported revenue attaches 0.01 NEAR only, earns no points, and is labelled "Reported — not independently verified" until a different member attests it with a 0.1 NEAR bond. Every entry needs an evidence reference, and a reference cannot be used twice for this asset.</p>
+      <label>Amount in NEAR<input id="revAmount" placeholder="3"></label>
+      <label>Source<input id="revSource" placeholder="Generator rental"></label>
+      <label>Evidence reference<input id="revRef" placeholder="invoice-001"></label>
+      <label>Kind
+        <select id="revStatus">
+          <option value="Onchain">Onchain (deposit the amount, verified at once)</option>
+          <option value="Reported">Reported (no deposit, needs attestation)</option>
+        </select>
+      </label>
+      <button onclick="recordRevenue()">Record revenue</button>
+    </div>
+
+    <h2>Expenses</h2>
+    <div id="expenseList"></div>
+    <div class="panel">
+      <h3>Pay an expense</h3>
+      <p class="small muted">DAO only. The locked funds guard runs first, then the spending policy if the community set one. Attaches 0.01 NEAR for storage.</p>
+      <p class="small">Spending policy: <span id="spendingNow">none set yet</span></p>
+      <label>Amount in NEAR<input id="expAmount" placeholder="0.5"></label>
+      <label>Recipient account<input id="expRecipient" placeholder="bob.testnet"></label>
+      <label>Description<input id="expDesc" placeholder="Fuel"></label>
+      <label>Category<input id="expCat" placeholder="operations"></label>
+      <button onclick="payExpense()">Pay expense</button>
+    </div>
+
+    <h2>Distributions</h2>
+    <div id="distributionList"></div>
+    <div class="panel">
+      <h3>Run a distribution</h3>
+      <p class="small muted">Pays members from this asset's realised revenue under the approved policy. The activity slice uses only the current epoch's verified work points; after the distribution the epoch advances and the points reset. A distribution only pays out new revenue since the last one; a second call with no new revenue is rejected. Attaches 0.01 NEAR for storage.</p>
+      <p class="small">Current policy: <span id="distPolicy">none set yet</span></p>
+      <p class="small">Epoch: <span id="epochNow">0</span></p>
+      <button onclick="executeDistribution()">Execute distribution</button>
+    </div>
+    <div class="panel">
+      <h3>How was my payout calculated</h3>
+      <p class="small muted">Pick a distribution to see the inputs and the computed amounts. Ownership and activity are shown as two separate lines.</p>
+      <label>Distribution id<input id="bdId" placeholder="0"></label>
+      <button onclick="showBreakdown()">Show my breakdown</button>
+      <div id="breakdown"></div>
+    </div>
+  </div>
+</main>
+<footer><span data-brand>OwnGround</span> runs on NEAR testnet.</footer>
+<script src="asset.js"></script>
+<script>
+initWallet();
+loadAsset();
+</script>
+</body>
+</html>
