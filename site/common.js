@@ -226,6 +226,7 @@ async function toggleWallet() {
     if (typeof id !== "string" || !id) { pageStatus("Could not determine the connected account. Try again."); return; }
     walletAccountId = id;
     refreshWalletBtn();
+    pageStatus("");
     walletChanged();
   } catch (e) { pageStatus("Wallet error: " + String(e.message).slice(0, 160)); }
 }
