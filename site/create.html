@@ -21,21 +21,35 @@
 </header>
 <main>
   <h1>Create a community</h1>
-  <p class="lede">The site creates a Sputnik DAO for the community, then registers it here. You can also use a DAO you already have.
-  Membership is fixed at creation and cannot change later. The founding policies below are set at creation; later changes go through an amendment (propose, wait the timelock, execute). Creating a community attaches 0.1 NEAR for storage.</p>
+  <p class="lede">Creating a community sets up its shared account automatically. Membership is fixed at creation and cannot change later. The founding policies below are set at creation; later changes go through an amendment (propose, wait the timelock, execute). Creating a community attaches 0.1 NEAR for storage.</p>
   <div class="panel">
     <label>Community name<input id="cName" placeholder="Lagos Energy Cooperative"></label>
     <label>Description<input id="cDesc" placeholder="What the community owns together"></label>
-    <h3>DAO for this community</h3>
-    <label><input type="radio" name="daoMode" value="new" checked onchange="toggleDaoPanels()"> Create a new DAO for this community</label>
-    <label><input type="radio" name="daoMode" value="existing" onchange="toggleDaoPanels()"> I already have a DAO</label>
-    <div id="daoNewPanel">
-      <label>DAO name<input id="cDaoName" placeholder="lagos-energy"></label>
-      <p class="small muted" id="daoIdPreview"></p>
-      <p class="small">Creating the DAO attaches 10 NEAR to the new DAO. That NEAR becomes the DAO's own balance for its own storage. It is not a fee. The DAO council is the members listed below, and 2 of them must approve a proposal for it to pass.</p>
+    <div class="dao-choice" role="radiogroup" aria-label="Shared account">
+      <label class="dao-option selected" id="daoOptCreate">
+        <input type="radio" name="daoChoice" value="create" checked>
+        <span>Create a new DAO for this community</span>
+      </label>
+      <label class="dao-option" id="daoOptAuto">
+        <input type="radio" name="daoChoice" value="auto">
+        <span>I don't have a DAO address</span>
+      </label>
     </div>
+    <div id="daoNewPanel">
+      <p class="small">We set up a shared account for the community as part of creating it. It holds the community funds, and the members below approve spending together.</p>
+      <label>Shared account name<input id="cDaoName" placeholder="lagos-energy"></label>
+      <p class="small muted" id="daoIdPreview"></p>
+      <p class="small">Setting this up attaches 10 NEAR to the new shared account. That NEAR stays in the account for its own storage. It is not a fee. The members listed below approve spending together, and 2 of them must approve for a proposal to pass.</p>
+    </div>
+    <div id="daoAutoPanel" style="display:none">
+      <p class="small">We set up a shared account for the community as part of creating it. It holds the community funds, and the members below approve spending together.</p>
+      <p class="small muted" id="daoAutoPreview"></p>
+      <p class="small">Setting this up attaches 10 NEAR to the new shared account. That NEAR stays in the account for its own storage. It is not a fee. The members listed below approve spending together, and 2 of them must approve for a proposal to pass.</p>
+    </div>
+    <p><a href="#" id="useExistingDaoLink" onclick="showExistingDao(event)">Already have a DAO? Use it instead</a></p>
     <div id="daoExistingPanel" style="display:none">
       <label>DAO account<input id="cDao" placeholder="lagos-energy.sputnikv2.testnet"></label>
+      <p><a href="#" id="useNewDaoLink" onclick="showNewDao(event)">Create a new shared account instead</a></p>
     </div>
     <label>Members, one NEAR account per line<textarea id="cMembers" rows="4" placeholder="alice.testnet&#10;bob.testnet"></textarea></label>
     <p id="memberWarning" class="status" style="display:none"></p>
@@ -77,36 +91,70 @@ const DAO_FACTORY_SUFFIX = ".sputnikv2.testnet";
 const PENDING_KEY = "ownground-pending-community";
 let daoNameEdited = false;
 
+// Which DAO path the form uses: "create" (pick a shared account name),
+// "auto" (the name is made from the community name, nothing to fill
+// in), or "existing" (the advanced link, a DAO the user already has).
+// The two visible options are the ones Isaiah asked for, word for
+// word: "Create a new DAO for this community" and "I don't have a DAO
+// address". The selected row is bold with a highlighted background, so
+// the choice reads from the font, not only from the radio dot.
+let daoChoice = "create";
 function daoMode() {
-  const checked = document.querySelector('input[name="daoMode"]:checked');
-  return checked ? checked.value : "new";
+  return daoChoice;
+}
+function setDaoChoice(mode) {
+  daoChoice = mode;
+  document.querySelectorAll('input[name="daoChoice"]').forEach((input) => {
+    input.checked = (input.value === mode);
+  });
+  toggleDaoPanels();
 }
 function toggleDaoPanels() {
   const mode = daoMode();
-  el("daoNewPanel").style.display = mode === "new" ? "" : "none";
+  el("daoNewPanel").style.display = mode === "create" ? "" : "none";
+  el("daoAutoPanel").style.display = mode === "auto" ? "" : "none";
   el("daoExistingPanel").style.display = mode === "existing" ? "" : "none";
+  el("useExistingDaoLink").style.display = mode === "existing" ? "none" : "";
+  document.querySelectorAll(".dao-option").forEach((row) => {
+    const input = row.querySelector('input[name="daoChoice"]');
+    row.classList.toggle("selected", !!input && input.checked && mode !== "existing");
+  });
   updateDaoPreview();
 }
+function showExistingDao(event) {
+  if (event) event.preventDefault();
+  setDaoChoice("existing");
+}
+function showNewDao(event) {
+  if (event) event.preventDefault();
+  setDaoChoice("create");
+}
 function daoNameValue() {
+  if (daoChoice === "auto") return slugify(el("cName").value);
   return el("cDaoName").value.trim().toLowerCase();
 }
 function updateDaoPreview() {
-  const preview = el("daoIdPreview");
-  if (!preview) return;
   const name = daoNameValue();
-  preview.textContent = name
-    ? "The DAO will be " + name + DAO_FACTORY_SUFFIX + "."
-    : "Pick a DAO name. The DAO will be <name>.sputnikv2.testnet.";
+  const createText = name
+    ? "Your community's shared account will be " + name + DAO_FACTORY_SUFFIX + "."
+    : "Pick a name. The shared account will be <name>.sputnikv2.testnet.";
+  const autoText = name
+    ? "Your community's shared account will be " + name + DAO_FACTORY_SUFFIX + "."
+    : "Type a community name above. The shared account is made from it.";
+  const preview = el("daoIdPreview");
+  if (preview) preview.textContent = createText;
+  const autoPreview = el("daoAutoPreview");
+  if (autoPreview) autoPreview.textContent = autoText;
 }
 // A NEAR account name part: 2 to 46 characters, lowercase letters,
 // digits, hyphens and underscores, not starting or ending with a
 // hyphen or underscore.
 function validateDaoName(name) {
-  if (!name) return "Pick a DAO name.";
-  if (name.length < 2) return "The DAO name needs at least 2 characters.";
-  if (name.length > 46) return "The DAO name is too long. Keep it under 46 characters.";
+  if (!name) return "Pick a name for the shared account.";
+  if (name.length < 2) return "The name needs at least 2 characters.";
+  if (name.length > 46) return "The name is too long. Keep it under 46 characters.";
   if (!/^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$/.test(name)) {
-    return "The DAO name can only use lowercase letters, digits, hyphens and underscores, and cannot start or end with a hyphen or underscore.";
+    return "The name can only use lowercase letters, digits, hyphens and underscores, and cannot start or end with a hyphen or underscore.";
   }
   return "";
 }
@@ -143,7 +191,7 @@ async function waitForDao(daoId, timeoutMs) {
     } catch (_) { /* not live yet */ }
     await new Promise((r) => setTimeout(r, 3000));
   }
-  throw new Error("The DAO " + daoId + " is not answering yet. Wait a moment and tap Create community again.");
+  throw new Error("The shared account " + daoId + " is not answering yet. Wait a moment and tap Create community again.");
 }
 // The DAO's own init args: council is the community members, and an
 // absolute weight of 2 must approve a proposal. This is the same policy
@@ -316,7 +364,7 @@ async function createCommunity() {
   try {
     exists = await daoAccountExists(daoId);
   } catch (e) {
-    pageStatus("Could not check whether that DAO name is free. Check your connection and try again.");
+    pageStatus("Could not check whether that name is free. Check your connection and try again.");
     setBusy(false);
     return;
   }
@@ -334,19 +382,19 @@ async function createCommunity() {
       setBusy(false);
       return;
     }
-    pageStatus("That DAO name is taken. Pick another name.");
+    pageStatus("That name is taken. Pick another name.");
     setBusy(false);
     return;
   }
   savePending({ step: "dao", daoName: daoName, daoId: daoId, fields: f });
-  setBusy(true, "Creating DAO…");
+  setBusy(true, "Setting up…");
   try {
     const args = daoInitArgs(daoName, f.description, f.members);
     await walletCall(window.DAO_FACTORY_ID, "create", {
       name: daoName,
       args: b64Utf8(JSON.stringify(args)),
     }, window.STORAGE.createDao, window.GAS_150);
-    pageStatus("DAO creation sent. The wallet will return here and the community will be registered next.");
+    pageStatus("Shared account setup sent. The wallet will return here and the community will be registered next.");
   } catch (e) { reportFailure(e); }
   setBusy(false);
 }
@@ -361,9 +409,9 @@ async function resumePending() {
   if (errorCode) {
     if (pending.step === "dao") {
       clearPending();
-      pageStatus("The DAO creation was not completed (" + errorCode + "). No money moved. Tap Create community to try again.");
+      pageStatus("The shared account setup was not completed (" + errorCode + "). No money moved. Tap Create community to try again.");
     } else {
-      pageStatus("The community creation was not completed (" + errorCode + "). Your DAO " + pending.daoId + " is ready. Tap Create community to try again.");
+      pageStatus("The community creation was not completed (" + errorCode + "). Your shared account " + pending.daoId + " is ready. Tap Create community to try again.");
     }
     return;
   }
@@ -374,13 +422,13 @@ async function resumePending() {
       try {
         if (await daoAccountExists(pending.daoId)) {
           savePending({ step: "community", daoName: pending.daoName, daoId: pending.daoId, fields: pending.fields });
-          pageStatus("Your DAO " + pending.daoId + " is ready. Tap Create community to register it.");
+          pageStatus("Your shared account " + pending.daoId + " is ready. Tap Create community to register it.");
         } else {
           clearPending();
-          pageStatus("No DAO was created. Tap Create community to try again.");
+          pageStatus("No shared account was created. Tap Create community to try again.");
         }
       } catch (_) {
-        pageStatus("Could not check the DAO. Tap Create community to continue.");
+        pageStatus("Could not check the shared account. Tap Create community to continue.");
       }
     } else {
       // No transaction hashes: the wallet may have opened in a new tab
@@ -398,7 +446,7 @@ async function resumePending() {
       if (s) {
         s.innerHTML = "The community may already be created. Open it here: <a href=\"" + escapeHtml(communityUrl(communityId)) + "\">" + escapeHtml(communityId) + "</a> or <a href=\"communities.html\">the live communities list</a>. If it is not there yet, tap Create community to try again.";
       } else {
-        pageStatus("Your DAO " + pending.daoId + " is ready. Tap Create community to register it.");
+        pageStatus("Your shared account " + pending.daoId + " is ready. Tap Create community to register it.");
       }
     }
     return;
@@ -415,9 +463,9 @@ async function resumePending() {
   if (state === "failed") {
     if (pending.step === "dao") {
       clearPending();
-      pageStatus("The DAO creation failed onchain. No money moved. Tap Create community to try again.");
+      pageStatus("The shared account setup failed onchain. No money moved. Tap Create community to try again.");
     } else {
-      pageStatus("The community creation failed onchain. Your DAO " + pending.daoId + " is ready. Tap Create community to try again.");
+      pageStatus("The community creation failed onchain. Your shared account " + pending.daoId + " is ready. Tap Create community to try again.");
     }
     return;
   }
@@ -443,7 +491,7 @@ async function resumePending() {
       await waitForDao(pending.daoId);
       savePending({ step: "community", daoName: pending.daoName, daoId: pending.daoId, fields: pending.fields });
       await sendCreateCommunity(pending.fields, pending.daoId);
-      pageStatus("DAO " + pending.daoId + " is ready. Community creation sent. Wait for the wallet to confirm, then open the live communities list.");
+      pageStatus("Your shared account " + pending.daoId + " is ready. Community creation sent. Wait for the wallet to confirm, then open the live communities list.");
     } catch (e) { reportFailure(e); }
     setBusy(false);
     return;
@@ -492,6 +540,9 @@ async function recheckPendingOnReturn() {
 }
 document.addEventListener("visibilitychange", () => { if (!document.hidden) recheckPendingOnReturn(); });
 window.addEventListener("focus", () => { recheckPendingOnReturn(); });
+document.querySelectorAll('input[name="daoChoice"]').forEach((input) => {
+  input.addEventListener("change", () => { if (input.checked) setDaoChoice(input.value); });
+});
 el("cName").addEventListener("input", () => {
   if (!daoNameEdited) { el("cDaoName").value = slugify(el("cName").value); }
   updateDaoPreview();

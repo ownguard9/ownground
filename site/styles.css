@@ -205,3 +205,33 @@ footer a:hover { color: var(--accent2); }
   main { padding: 18px 14px 64px; }
   .card .big { font-size: 24px; }
 }
+/* DAO choice on the create page: two compact rows, the radio inline
+   on the left and its label on the same line to the right, so the
+   section fits a phone screen. The selected row is bold with a
+   highlighted background, so the choice reads from the font itself,
+   not only from the radio dot. */
+.dao-choice { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 4px; }
+.dao-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 15px;
+  margin: 0;
+}
+.dao-option input[type="radio"] {
+  flex: none;
+  width: auto;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.dao-option span { flex: 1; }
+.dao-option.selected {
+  background: #123324;
+  border-color: var(--accent);
+  font-weight: 700;
+}

@@ -93,6 +93,14 @@ async function load() {
       const camps = await Promise.all(c.campaign_ids.map((cid) => view("get_campaign", { campaign_id: cid })));
       return { id, c, t, camps };
     }));
+    // Newest first, with the pinned showcase community at the top:
+    // list_communities returns creation order (oldest first), so reverse
+    // the rows, then lift the pinned ones to the front in pinned order.
+    allRows.reverse();
+    const pinned = window.PINNED_COMMUNITIES || [];
+    const pinnedRows = pinned.map((id) => allRows.find((r) => r.id === id)).filter(Boolean);
+    const restRows = allRows.filter((r) => !pinned.includes(r.id));
+    allRows = pinnedRows.concat(restRows);
     // Stats count only the communities actually listed, so the header
     // cards agree with the cards below (the hidden demo runs are not counted).
     const stats = {

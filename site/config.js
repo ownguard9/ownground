@@ -14,6 +14,12 @@ window.CONTRACT_ID = "ownground2.testnet";
 // their history onchain, but the list shows only the live demo community.
 window.HIDDEN_COMMUNITIES = ["lagos-energy-cooperative", "lagos-energy-cooperative-2"];
 
+// Showcase community, pinned at the top of the list: it shows the full
+// flow (funded, asset acquired, revenue, distributions), so a new visitor
+// sees the complete picture first. Update this when the site switches to
+// the v3 contract (the v3 demo community is lagos-energy-cooperative-5).
+window.PINNED_COMMUNITIES = ["lagos-energy-cooperative-3"];
+
 // Testnet only. Never point this at mainnet.
 window.NETWORK = "testnet";
 window.RPC_ENDPOINTS = ["https://rpc.testnet.near.org", "https://rpc.testnet.fastnear.com"];
