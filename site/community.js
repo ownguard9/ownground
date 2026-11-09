@@ -123,6 +123,11 @@ async function verifyPendingAction(p) {
       if (prop && (!p.description || prop.description === p.description)) return { proposal: prop };
       return null;
     }
+    if (p.action === "dao-vote") {
+      const prop = await rpcViewCall(p.daoId, "get_proposal", { id: p.proposalId });
+      if (prop && prop.votes && prop.votes[p.account] === "Approve") return { proposal: prop };
+      return null;
+    }
     if (p.action === "execute-amendment") {
       const policies = await view("get_policies", { community_id: p.communityId });
       const a = (policies.amendments || []).find((x) => Number(x.id) === Number(p.amendmentId));
@@ -145,6 +150,8 @@ function confirmPendingAction(p, found) {
   } else if (p.action === "dao-proposal") {
     localStatus(p.statusId, "DAO proposal " + p.proposalId + " created. Council members vote, then the DAO executes it.");
     showProposalCreated(p.daoId, p.proposalId, p.description || "");
+  } else if (p.action === "dao-vote") {
+    localStatus(p.statusId, "Vote approve on DAO proposal " + p.proposalId + " confirmed.");
   } else if (p.action === "execute-amendment") {
     amendStatus("Amendment " + p.amendmentId + " executed. The new policy is in force.");
   }
@@ -282,13 +289,20 @@ async function loadCommunity() {
     renderHeader(c);
     renderPolicies(c, policies);
     pageStatus("Loading campaigns and assets…");
-    const [campaigns, assets, distributions] = await Promise.all([
+    const [campaigns, assets, distributions, daoData] = await Promise.all([
       Promise.all(community.campaign_ids.map((id) => view("get_campaign", { campaign_id: id }))),
       Promise.all(community.asset_ids.map((id) => view("get_asset", { asset_id: id }))),
       Promise.all(community.asset_ids.map((id) => view("get_distributions", { asset_id: id }))),
+      // A DAO read failing must not take the community page down.
+      loadDaoData().catch(() => null),
     ]);
     pageStatus("");
     renderCommunity(community, t, policies, campaigns, assets, distributions);
+    if (daoData) renderDaoProposals(daoData.policy, daoData.proposals);
+    else {
+      const box = el("daoProposals");
+      if (box) box.innerHTML = "<p>Could not load DAO proposals. Check the DAO on Nearblocks.</p>";
+    }
   } catch (e) {
     pageStatus("Could not load this community: " + String(e.message).slice(0, 160));
   }
@@ -669,6 +683,68 @@ async function cancelAmendment(id) {
     );
     showProposalCreated(community.dao_id, pid, "Cancel policy amendment " + id + " for community " + communityId);
   } catch (e) { clearPendingActionIfToken(cancelAmendToken); amendFailure(e); }
+}
+
+// ---- DAO proposals: the list and the vote buttons ----
+// The page used to show a Vote button only in #proposalBox right after
+// a proposal was created in the same session; after a reload there was
+// no way to vote. This section loads the DAO's proposals on every
+// community load and renders each with its status, vote count and, for
+// council members, a Vote button. The DAO is per community, so every
+// proposal on it belongs to this community.
+function daoProposalStatus(id, msg) { localStatus("propStatus-" + id, msg); }
+
+async function loadDaoData() {
+  const [policy, proposals] = await Promise.all([
+    rpcViewCall(community.dao_id, "get_policy", {}),
+    rpcViewCall(community.dao_id, "get_proposals", { from_index: 0, limit: 50 }),
+  ]);
+  return { policy: policy, proposals: proposals || [] };
+}
+
+function renderDaoProposals(policy, proposals) {
+  const box = el("daoProposals");
+  if (!box) return;
+  const council = daoCouncilMembers(policy);
+  const threshold = daoVoteThreshold(policy);
+  const list = (proposals || []).slice().reverse(); // newest first
+  if (!list.length) { box.innerHTML = "<p>No DAO proposals yet.</p>"; return; }
+  box.innerHTML = list.map((p) => {
+    const id = Number(p.id);
+    const approvals = daoProposalApprovals(p);
+    const countText = threshold === null
+      ? "Approvals: " + approvals + "."
+      : "Approvals: " + approvals + " of " + threshold + ".";
+    let action = "";
+    if (p.status === "InProgress") {
+      if (walletAccountId && council.indexOf(walletAccountId) >= 0) {
+        const mine = (p.votes || {})[walletAccountId];
+        action = mine === "Approve"
+          ? '<p class="small muted">You already voted approve on this proposal.</p>'
+          : '<button onclick="voteDaoProposalFromList(' + id + ')">Vote approve proposal ' + id + "</button>";
+      } else {
+        action = '<p class="small muted">Only DAO council members can vote. Switch to a council member\'s wallet to vote.</p>';
+      }
+    }
+    // The status element is always rendered, so the return re-check
+    // has a target even when the vote flips the proposal to Approved
+    // and the button goes away on the data refresh.
+    return '<div class="panel"><p><strong>Proposal ' + id + ":</strong> " + escapeHtml(p.description) + "</p>" +
+      "<p>Status " + escapeHtml(p.status) + ". Proposed by " + escapeHtml(p.proposer) + ".</p>" +
+      "<p>" + countText + "</p>" + action +
+      '<p id="propStatus-' + id + '" class="status"></p></div>';
+  }).join("");
+}
+
+async function voteDaoProposalFromList(proposalId) {
+  if (!community) return;
+  const statusId = "propStatus-" + proposalId;
+  if (!needWallet((m) => localStatus(statusId, m))) return;
+  const voteToken = ++pendingActionToken;
+  await voteDaoProposal(community.dao_id, proposalId, {
+    token: voteToken, communityId: communityId, account: walletAccountId, statusId: statusId,
+    progressMsg: "Voting approve on DAO proposal " + proposalId + "…",
+  });
 }
 
 window.owngroundWalletChanged = loadCommunity;

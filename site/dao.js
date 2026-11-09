@@ -21,6 +21,46 @@ function base64Encode(s) {
   return btoa(unescape(encodeURIComponent(s)));
 }
 
+// Read the DAO council and the approval threshold out of a Sputnik v2
+// get_policy result. The council is the "council" role's Group; the
+// threshold comes from that role's vote_policy, falling back to the DAO
+// default. Weight is an absolute count. RoleWeight and Ratio are
+// fractions of the council's total weight (every member weighs 1), and
+// a proposal needs strictly more than the fraction, so the count is
+// floor(size * num / den) + 1. A policy with no usable threshold
+// returns null, and the page shows approvals without a total.
+function daoCouncilMembers(policy) {
+  const roles = (policy && policy.roles) || [];
+  const council = roles.find((r) => r.name === "council");
+  const kind = council && council.kind;
+  if (kind && Array.isArray(kind.Group)) return kind.Group.slice();
+  return [];
+}
+function daoVoteThreshold(policy) {
+  const roles = (policy && policy.roles) || [];
+  const council = roles.find((r) => r.name === "council");
+  let vp = (council && council.vote_policy) || {};
+  if (!vp || Object.keys(vp).length === 0) vp = (policy && policy.default_vote_policy) || {};
+  if (vp.Weight !== undefined) return Number(vp.Weight);
+  const councilSize = daoCouncilMembers(policy).length;
+  const frac = vp.RoleWeight || vp.Ratio;
+  if (Array.isArray(frac) && frac.length === 2 && councilSize > 0 && Number(frac[1]) > 0) {
+    return Math.floor((councilSize * Number(frac[0])) / Number(frac[1])) + 1;
+  }
+  return null;
+}
+// Approvals so far on a proposal: the first element of each role's
+// vote_counts triple [approve, reject, remove], summed across roles.
+function daoProposalApprovals(proposal) {
+  const counts = (proposal && proposal.vote_counts) || {};
+  let total = 0;
+  for (const role of Object.keys(counts)) {
+    const arr = counts[role];
+    if (Array.isArray(arr)) total += Number(arr[0]) || 0;
+  }
+  return total;
+}
+
 // Link to the DAO on the testnet explorer. The proposal id is shown in
 // the link text next to it; Nearblocks lists DAO proposals under the
 // DAO address.
@@ -112,6 +152,9 @@ function validateAllocations(allocations, members) {
       DAO_ACTION_GAS: DAO_ACTION_GAS,
       DAO_VOTE_GAS: DAO_VOTE_GAS,
       daoProposalUrl: daoProposalUrl,
+      daoCouncilMembers: daoCouncilMembers,
+      daoVoteThreshold: daoVoteThreshold,
+      daoProposalApprovals: daoProposalApprovals,
       buildDaoProposalArgs: buildDaoProposalArgs,
       proRataAllocations: proRataAllocations,
       validateAllocations: validateAllocations,
@@ -122,6 +165,9 @@ function validateAllocations(allocations, members) {
     root.DAO_ACTION_GAS = DAO_ACTION_GAS;
     root.DAO_VOTE_GAS = DAO_VOTE_GAS;
     root.daoProposalUrl = daoProposalUrl;
+    root.daoCouncilMembers = daoCouncilMembers;
+    root.daoVoteThreshold = daoVoteThreshold;
+    root.daoProposalApprovals = daoProposalApprovals;
     root.buildDaoProposalArgs = buildDaoProposalArgs;
     root.proRataAllocations = proRataAllocations;
     root.validateAllocations = validateAllocations;
@@ -175,10 +221,34 @@ function showProposalCreated(daoId, proposalId, description) {
   pageStatus("DAO proposal " + proposalId + " created. Council members vote, then the DAO executes it.");
 }
 
-async function voteDaoProposal(daoId, proposalId) {
+// VoteApprove on a DAO proposal. The optional pendingMeta (community
+// page only) records the pending vote BEFORE the wallet opens, so the
+// page's return re-check can confirm it landed, and the progress and
+// failure messages go to the proposal's own status element instead of
+// the page status. Without it (the #proposalBox button) behaviour is
+// unchanged. The typeof guards keep the pending path a no-op on pages
+// without the community page's pending-action tracker.
+async function voteDaoProposal(daoId, proposalId, pendingMeta) {
   if (!walletAccountId) { pageStatus("Connect a wallet first."); return; }
+  const token = pendingMeta ? pendingMeta.token : null;
+  if (pendingMeta && typeof savePendingAction === "function") {
+    savePendingAction({
+      token: token, action: "dao-vote", communityId: pendingMeta.communityId,
+      daoId: daoId, proposalId: proposalId, account: pendingMeta.account,
+      statusId: pendingMeta.statusId, progressMsg: pendingMeta.progressMsg, savedAt: Date.now(),
+    });
+  }
+  const statusFn = (pendingMeta && pendingMeta.statusId && typeof localStatus === "function")
+    ? (m) => localStatus(pendingMeta.statusId, m)
+    : pageStatus;
   try {
-    pageStatus("Voting approve on DAO proposal " + proposalId + "…");
+    statusFn(pendingMeta && pendingMeta.progressMsg ? pendingMeta.progressMsg : "Voting approve on DAO proposal " + proposalId + "…");
     await walletCall(daoId, "act_proposal", { id: proposalId, action: "VoteApprove" }, "0", DAO_VOTE_GAS);
-  } catch (e) { reportFailure(e); }
+  } catch (e) {
+    if (pendingMeta) {
+      if (typeof clearPendingActionIfToken === "function") clearPendingActionIfToken(token);
+      if (typeof localFailure === "function") { localFailure(pendingMeta.statusId, e); return; }
+    }
+    reportFailure(e);
+  }
 }

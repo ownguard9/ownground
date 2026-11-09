@@ -6,6 +6,9 @@ const {
   proRataAllocations,
   validateAllocations,
   daoProposalUrl,
+  daoCouncilMembers,
+  daoVoteThreshold,
+  daoProposalApprovals,
   DAO_PROPOSAL_DEPOSIT_YOCTO,
   DAO_ACTION_GAS,
   DAO_VOTE_GAS,
@@ -87,6 +90,44 @@ function sumBp(list) { return list.reduce((s, [, bp]) => s + bp, 0); }
 {
   check("dao proposal url",
     daoProposalUrl("mydao.sputnikv2.testnet") === "https://testnet.nearblocks.io/address/mydao.sputnikv2.testnet");
+}
+
+// 5. Council, threshold and approval counts out of get_policy /
+// get_proposal results, including the live vehicle-coop shape.
+{
+  const policy = {
+    roles: [
+      { name: "all", kind: { Group: ["*"] }, permissions: ["*:AddProposal"], vote_policy: {} },
+      { name: "council", kind: { Group: ["peter-vehicles.testnet", "felix-vehicles.testnet", "grace-vehicles.testnet", "daniel-vehicles.testnet"] }, permissions: ["*:VoteApprove"], vote_policy: {} },
+      { name: "community", kind: { Group: ["*"] }, permissions: [], vote_policy: {} },
+    ],
+    default_vote_policy: { Weight: "2" },
+    proposal_bond: "1000000000000000000000000",
+    proposal_period: "604800000000000",
+  };
+  check("council members read from the council role",
+    JSON.stringify(daoCouncilMembers(policy)) === JSON.stringify(["peter-vehicles.testnet", "felix-vehicles.testnet", "grace-vehicles.testnet", "daniel-vehicles.testnet"]));
+  check("Weight threshold falls back to the DAO default", daoVoteThreshold(policy) === 2);
+  check("council members empty when no policy", daoCouncilMembers(null).length === 0);
+  check("threshold null when no policy", daoVoteThreshold(null) === null);
+  const roleWeight = {
+    roles: [{ name: "council", kind: { Group: ["a.testnet", "b.testnet"] }, permissions: [], vote_policy: { RoleWeight: ["1", "2"] } }],
+    default_vote_policy: { Weight: "2" },
+  };
+  check("RoleWeight 1 of 2 with a 2 member council needs 2 approvals", daoVoteThreshold(roleWeight) === 2);
+  const ratio = {
+    roles: [{ name: "council", kind: { Group: ["a.testnet", "b.testnet", "c.testnet", "d.testnet"] }, permissions: [], vote_policy: { Ratio: ["1", "2"] } }],
+    default_vote_policy: {},
+  };
+  check("Ratio 1 of 2 with a 4 member council needs 3 approvals", daoVoteThreshold(ratio) === 3);
+  check("approvals read from the council vote_counts triple",
+    daoProposalApprovals({ vote_counts: { council: [1, 0, 0] } }) === 1);
+  check("approvals zero when vote_counts is empty",
+    daoProposalApprovals({ vote_counts: {} }) === 0);
+  check("approvals zero when vote_counts is missing",
+    daoProposalApprovals({}) === 0);
+  check("approvals sum across roles",
+    daoProposalApprovals({ vote_counts: { council: [1, 0, 0], community: [2, 0, 0] } }) === 3);
 }
 
 console.log(`\n${passed} DAO HELPER CHECKS PASSED`);
