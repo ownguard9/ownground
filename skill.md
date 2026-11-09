@@ -8,8 +8,8 @@ only**. There is no mainnet version.
 ## Live deployment
 
 - Site: https://ownground.vercel.app/
-- Contract: `ownground2.testnet`
-- Demo DAO: `lagos-energy2.testnet`
+- Contract: `ownground3.testnet`
+- Demo DAO: `lagos-energy3.testnet`
 - Repo: https://github.com/ownguard9/ownground
 - Full detail: README.md and DESIGN.md in the repo. The runnable demo is
   `scripts/demo.mjs`; the live-state checker is `scripts/verify.mjs`.
@@ -35,9 +35,9 @@ discretionary spend needs the DAO as the caller: `acquire_asset`,
 `pay_expense`, `propose_policy_change` and `resolve_dispute` all reject a
 non-DAO caller. The contract holds the funds and enforces the locked
 campaign funds, the spending policy, and the distribution maths. A
-distribution already paid is never re-run. (A guard that blocks a
-distribution while an entry is disputed or still inside its dispute window
-is being added to the next contract version.)
+distribution already paid is never re-run. A guard blocks a distribution
+while an entry is disputed or still inside its dispute window; it is live
+in the v3 contract (`ownground3.testnet`).)
 
 ## Method reference
 
@@ -88,7 +88,7 @@ Amounts are yoctoNEAR strings. `N` below is 1 NEAR = 10^24 yoctoNEAR.
   follow work points; with zero work points the activity pool falls back
   to ownership shares.
 
-## Worked example (the live v2 demo)
+## Worked example (the live v3 demo)
 
 Four members contribute 2.5 NEAR each (10 NEAR target). The DAO acquires
 a generator for 10 NEAR. Alice records 3 NEAR onchain revenue. Bob
@@ -96,11 +96,15 @@ records 1 NEAR reported revenue; Alice attests it (0.1 NEAR bond). Carol
 disputes it; the DAO upholds, so the entry is rejected, the bond is
 forfeited, and Bob's 2 points are removed. A 2 NEAR expense is rejected
 (over the 1 NEAR cap); a 0.5 NEAR expense succeeds. The DAO raises the cap
-to 2 NEAR through the timelock. Distribution: distributable 2.6 NEAR,
-each member 0.39 NEAR, retention 0.65, maintenance 0.39, final treasury
-1.04 NEAR. The activity pool is 0, so all four payouts are equal. The
-receipts are `demo-receipts-lagos-energy-cooperative-3.json` in the repo;
-run `scripts/verify.mjs --receipts <that file>` to check them.
+to 2 NEAR through the timelock. Dave records 1 NEAR reported revenue;
+Carol attests it (0.1 NEAR bond), so Dave holds the only 2 work points.
+The demo waits out the dispute window, then Carol's bond is released.
+Distribution: distributable 2.6 NEAR, member pool 1.56, activity pool
+0.156 (all to Dave), ownership pool 1.404 (0.351 each). Payouts: Alice
+0.351, Bob 0.351, Carol 0.351, Dave 0.507. Retention 0.65, maintenance
+0.39, final treasury 1.04 NEAR. The receipts are
+`demo-receipts-lagos-energy-cooperative-5.json` in the repo; run
+`scripts/verify.mjs --receipts <that file>` to check them.
 
 ## Rules for the agent using this skill
 
