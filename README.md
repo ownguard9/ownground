@@ -21,12 +21,11 @@ mainnet parts.
 ## Live deployment (NEAR testnet)
 
 Deployed 2026-11-09; the demo below ran live against these accounts
-twice (`scripts/demo.mjs`, logs `demo-log-v2.txt` and
-`demo-log-v2-attempt3.txt`; verifier log `verify-live-v2.txt`, 89/89
-PASS). The first v2 run used community `lagos-energy-cooperative-2`
+twice, both runs passing all 17 steps with identical final numbers.
+The first v2 run used community `lagos-energy-cooperative-2`
 (campaign `-c1`, asset `-a1`); the second, fully receipt-verified run
 used community `lagos-energy-cooperative-3` (campaign `-c2`, asset
-`-a2`). Both passed all 17 steps with identical final numbers.
+`-a2`).
 
 | What | Account / id |
 |---|---|
@@ -38,13 +37,6 @@ used community `lagos-energy-cooperative-3` (campaign `-c2`, asset
 | Members | `alice.ownground2.testnet`, `bob.ownground2.testnet`, `carol.ownground2.testnet`, `dave.ownground2.testnet` |
 | Seller | `seller.ownground2.testnet` |
 | Operations recipient | `ops.ownground2.testnet` |
-
-The v1 deployment (`ownground.testnet`, DAO `lagos-energy.testnet`,
-community `lagos-energy-cooperative`) is superseded and is not
-redeployed: the remediation changed the contract state layout and
-there is no migrate method, so v2 is a fresh contract. Its demo
-passed 17 steps with the old numbers (alice 0.507, others 0.351);
-those numbers no longer apply — see the demo section below.
 
 ## How it works
 
@@ -194,80 +186,25 @@ reported) and on the people who attested them, not on the contract.
 
 ## Who holds the money, and who can spend it
 
-The contract holds the pooled funds; the DAO authorises spending.
-Neither can move money alone. Every spend needs the DAO as the
-caller, and the contract enforces its own checks on top of the DAO's
-vote — locked campaign funds, the spending policy, and the
-distribution maths. A passed DAO proposal cannot spend locked funds,
-pay an over-cap expense, or pay a member twice, because the contract
-checks again when the DAO calls it. Routing the funds through the
-DAO treasury instead would weaken those guarantees: a passed
-proposal could spend locked funds, and the contract could not enforce
-its guards from outside.
+OwnGround splits custody on purpose: the contract holds the funds, and the community's Sputnik DAO authorises every discretionary spend.
 
-| Action | Who can call it | What the contract checks |
+Why the contract holds them: the locked-funds guard, the spending policy and the exact-sum distribution can only be enforced by the contract that knows its own balance. If a DAO treasury held the pool, a passed proposal could spend campaign money that members had locked, and nothing could stop it.
+
+| Action | Who can call it | What the contract still checks |
 |---|---|---|
-| Contribute | any member | campaign Open; attached deposit is the contribution + 0.01 NEAR storage |
-| Acquire the asset | DAO only | campaign Funded; treasury holds at least the target; allocation sums to exactly 10000 bp |
-| Pay an expense | DAO only | inside the spending policy (cap, reserve, category); spendable funds cover it |
-| Refund my contribution | the contributor | campaign Open; each contribution refunded once, never twice |
-| Cancel a campaign | DAO only | campaign Open or Funded; every contributor gets a refund claim, each claimable once |
-| Record revenue | any member | onchain: attached deposit is the amount + 0.01 NEAR storage; reported: attached deposit is 0.01 NEAR only, no money moves |
-| Attest revenue | a different member | 0.1 NEAR bond + 0.01 NEAR storage; entry Pending |
-| Dispute revenue | any member | entry Verified; inside the dispute window; not the recorder or the attestor |
-| Resolve a dispute | DAO only | entry Disputed; uphold marks it Rejected and forfeits the bond to the treasury; reject marks it Verified, returns the bond, and restores work points only if the entry's epoch is still current |
-| Propose a policy change | DAO only | type and params match; deadline is now + timelock; supersedes a pending proposal of the same type |
-| Execute a policy change | anyone | after the deadline, within 30 days after it |
-| Execute a distribution | anyone | the caller chooses nothing — amounts are computed from onchain counters; one distribution per epoch, so it cannot run twice |
+| Acquire asset | DAO | campaign funded, treasury >= target |
+| Pay expense | DAO | cap, reserve floor, allowed category |
+| Cancel campaign | DAO | campaign is Open or Funded; refunds every contributor exactly once |
+| Resolve dispute | DAO | entry is Disputed; uphold: entry Rejected, attestation bond forfeited to treasury, recorder's points stay removed; reject: entry Verified, bond returned to attestor, points restored only if the entry's epoch is still current |
+| Propose policy change | DAO | policy type and params match; records a pending amendment with deadline now + timelock; a new proposal for the same type supersedes a pending one; old policy stays in force until executed |
+| Execute policy change | Anyone, after the timelock | deadline passed, not expired |
+| Refund | Contributor | open campaign, once only |
+| Bond release | Attestor | window passed |
+| Distribution | Anyone | one-shot, payouts sum exactly |
 
-If a transfer fails, the contract reverts the state change instead of
-counting money that never moved: a failed acquisition puts the
-campaign back to Funded with no asset recorded, a failed expense is
-not counted, and a failed refund restores the contribution, so the
-operation can be retried. This is covered by the unit tests, and it
-was proven live in the first v2 demo run, where the expense transfer
-failed because the recipient account did not exist yet and the
-expense stayed uncounted.
+Trade-offs: the contract is a single custodian of pooled funds, it is unaudited, and it should only ever hold testnet NEAR. Failed-transfer reconciliation: every transfer the contract initiates carries a private callback — acquire, expense, refund (including claim refunds), distribution payouts and bond returns. If a transfer fails, the callback reverts the state change, so the operation can be retried instead of the ledger counting money that never moved: a failed acquisition puts the campaign back to Funded with no asset recorded, a failed expense is not counted, and a failed refund restores the contribution. Cancel itself moves no money — it only records one claimable refund per contributor — so there is no cancel callback; the money moves when each contributor claims, and a failed claim leaves the claim open for retry. The unit tests cover a failed transfer for every one of these operations, and the first v2 demo run proved it live: the expense transfer failed because the recipient account did not exist yet, and the expense stayed uncounted.
 
-Trezu is a mainnet-only treasury product with no live testnet payout
-path — its UI can read a testnet Sputnik DAO read-only in guest mode,
-but its production backend errors on testnet balances — so no testnet
-submission can pay through Trezu live. OwnGround therefore holds
-funds in its own contract on testnet, under the split-custody rule
-above.
-
-## Spending policy guard messages
-
-Every `pay_expense` rejection names the rule violated:
-
-- `expense exceeds max_single_expense`
-- `expense would breach min_treasury_reserve`
-- `expense category not allowed`
-- `expense exceeds spendable funds`
-
-## Policy amendment process
-
-1. The DAO proposes a change (`propose_policy_change`, DAO only).
-   A new proposal for a policy type supersedes a pending one of that type.
-2. The timelock runs (default 3 days; minutes in the demo). The old
-   policy stays in force.
-3. Anyone executes it after the deadline (`execute_policy_change`).
-   Amendments expire 30 days after the deadline. The DAO can cancel a
-   pending amendment. If governance deadlocks, the old policy stays in
-   force and the community keeps working.
-
-## Cycling loses money
-
-Work points come from verified revenue only, and a distribution pays a
-member their ownership share plus their activity share of the member
-pool. A member who deposits 3 NEAR as onchain revenue recovers 0.45
-NEAR — only their 25% ownership share of the member pool, because an
-onchain deposit earns no work points (the other three members get
-0.45 NEAR each too). Splitting contributions earns nothing extra
-(capital points come from the cumulative total), duplicate revenue
-references are rejected, and each distribution resets the current
-epoch's work points to zero. There is no loop that pays back more than
-was put in.
+Trezu: Trezu (https://trezu.app) is a Sputnik-DAO-compatible treasury UI, but it is production mainnet-only: we verified its UI reads a testnet Sputnik DAO in read-only guest mode, while its production backend returns errors for testnet balances and there is no live Trezu testnet payout path, so OwnGround does not use it.
 
 ## Tests
 
@@ -276,37 +213,15 @@ was put in.
   near-workspaces build script downloader ignores the proxy, so run
   with `NEAR_SANDBOX_BIN_PATH=$HOME/.near/near-sandbox-2.14.0/near-sandbox
   cargo test --lib`):
-  funding cap, acquire gating (seller transfer, treasury >= target),
-  treasury conservation (including refunds), distribution rounding and
-  the exact-sum invariant, one-shot distribution, double refund
-  prevention, DAO-only enforcement, revenue status labelling, the
-  locked-funds guard, spending policy (over-cap, reserve floor, category,
-  DAO-bound, zero cap, acquisitions uncapped), capital points (splitting,
-  sub-1-NEAR = 0, custom weights), work points (formula, non-member earns
-  none, reported earns nothing until attested, self/double/non-member
-  attestation rejected, bond required, duplicate/empty reference
-  rejected), disputes (recorder/attestor/non-member/pending/onchain/
-  after-window rejected; uphold removes points + bond to treasury;
-  reject restores points + returns bond; resolve requires DAO), bond
-  release (window, attestor-only, failed transfer reverts to Held),
-  policy amendments (propose/cancel DAO-only, execute before deadline
-  rejected, execute after deadline applies, expiry after 30 days,
-  supersede, old policy stays in force, anyone can execute), circular
-  farming (recovers less than deposit; epoch reset), failed-payout
-  reconciliation (unpaid listed, totals unchanged, amount distributable
-  again), payout callback no-op with no promise results, refunds (open
-  campaign, funded rejected, non-contributor rejected, double refund
-  rejected), **transfer callbacks (remediation P0: a failed acquire,
-  expense, cancel or refund transfer reverts the state change so the
-  operation is retryable; claim-based refunds for cancelled
-  campaigns)**, **policy validation (remediation P0: every policy is
-  validated at creation and on amendment — shares must sum to 10000,
-  activity_bp ≤ 10000, no empty/duplicate/>64-char/>20 expense
-  categories, activity weights ≤ 1,000,000, timelock and dispute
-  window between 60s and 365 days)**, **epoch-safe disputes
-  (remediation P1: suspend/restore touch points only in the entry's
-  own epoch; dispute → distribution → new activity → resolution,
-  both upheld and rejected)**.
+  funding, acquisition, treasury conservation, distribution maths and
+  the exact-sum invariant, DAO-only enforcement, revenue and
+  attestation, disputes and bonds, policy amendments, circular
+  farming, and the remediation fixes: transfer callbacks (a failed
+  acquire, expense, cancel or refund reverts so it can be retried;
+  claim-based refunds for cancelled campaigns), policy validation
+  (shares sum to 10000, activity_bp ≤ 10000, timelock and dispute
+  window 60s–365d, expense categories capped), and epoch-safe
+  disputes (suspend/restore touch only the entry's own epoch).
 - **Maths scripts, all passing**: `node check-maths.mjs` (34 checks) and
   `node check-maths-activity.mjs` (capital points, work-points formula,
   demo split, dispute flow, epoch reset, circular farming, zero-points
@@ -320,33 +235,24 @@ was put in.
   the seller, the expense recipient and all four members were paid —
   proved by exact balance deltas across each tx's block window).
 - **Wasm build: SUCCEEDED.** `cargo build --target wasm32-unknown-unknown
-  --release` produces `target/wasm32-unknown-unknown/release/ownground.wasm`
-  (725,095 bytes). `cargo near build` needs a TTY and fails without one.
-  ABI generated with `cargo near abi` (`target/near/ownground_abi.json`,
-  33 methods). Public types carry `NearSchema` + `#[abi(json)]` so the
-  ABI generates; the derive is inert on wasm32.
+  --release` produces the wasm (725,095 bytes); ABI generated with
+  `cargo near abi` (33 methods). `cargo near build` needs a TTY and
+  fails without one.
 - **Integration test: written and compiles, but stale and cannot run in
   this VM.** `contract/tests/demo.rs` runs the full demo flow on a
-  near-workspaces sandbox (DAO played by a plain account). It still
-  asserts the v1 numbers (alice 0.507, activity pool 0.156), uses a
+  near-workspaces sandbox, but it still asserts the v1 numbers, uses a
   1-nanosecond timelock the new policy validation rejects, and calls
-  `acquire_asset` without the allocation argument the remediation
-  added — it needs updating to the v2 demo before it can pass
-  anywhere. The sandbox binary was downloaded from S3 (the Rust
-  downloader ignores the proxy; curl works) and lives at
-  `~/.near/near-sandbox-2.14.0/near-sandbox` — set
-  `NEAR_SANDBOX_BIN_PATH` to it when running the test. But the node
-  itself cannot start here: it requires raising the file-descriptor
-  limit to 65535 and this container caps it at 4096, unraisable even as
-  root (`ulimit` and `prlimit` both fail with Operation not permitted).
-  Run the test on a machine where the limit can be raised:
+  `acquire_asset` without the allocation argument — it needs updating
+  to the v2 demo before it can pass anywhere. The sandbox node cannot
+  start here either: it needs the file-descriptor limit raised to
+  65535 and this container caps it at 4096, unraisable even as root.
+  Run it on a machine where the limit can be raised:
   `NEAR_SANDBOX_BIN_PATH=~/.near/near-sandbox-2.14.0/near-sandbox cargo test --test demo`.
 
 ## Limits
 
-- **Testnet only.** No mainnet parts, no fee logic, no Trezu. Trezu is
-  production mainnet-only and has no live testnet payout path, so it is
-  not used here.
+- **Testnet only.** No mainnet parts, no fee logic, no Trezu (see Who
+  holds the money above).
 - **Demo accounts only.** The demo members, seller and DAO are test
   accounts. No real people have used OwnGround.
 - **Deployer key held during the hackathon.** The deployer account is
@@ -354,10 +260,6 @@ was put in.
   contract, but the deployment itself is not yet decentralised.
 - **No audit.** The contract has unit tests and maths checks, not an
   independent audit. Do not put real money in it.
-- **Physical revenue claims rest on the recorded entry's status.**
-  Onchain revenue is verified by the deposit. Reported revenue is a
-  claim until attested, and attestation is a member staking a bond, not
-  proof that a generator exists or an invoice is genuine.
 - **The contract cannot verify a DAO exists without a cross-contract
   call.** `create_community` takes a DAO account id on trust; a
   mistyped or non-DAO account would only fail later, when a DAO-only
@@ -365,14 +267,6 @@ was put in.
 - **Ownership allocation is immutable.** Allocations are fixed at
   acquisition from cumulative contributions; there is no transfer or
   reallocation of ownership shares.
-- **The sandbox integration test is stale.** `contract/tests/demo.rs`
-  still asserts the v1 demo numbers and calls `acquire_asset` without
-  the allocation argument; it needs updating to the v2 demo (see
-  Tests above). It also cannot run in this VM (file-descriptor limit
-  4096, sandbox needs 65535).
-- **The site reads contract state; it holds no funds and signs nothing
-  itself.** The wallet signs every transaction, and the site never shows
-  success before the chain confirms it.
 
 ## Files
 
