@@ -15,20 +15,59 @@ async function loadCommunity() {
   communityId = params.get("id");
   if (!communityId) { pageStatus("No community id in the link."); return; }
   if (!deployed()) { el("notDeployed").style.display = "block"; return; }
+  pageStatus("Loading this community…");
   try {
-    community = await view("get_community", { community_id: communityId });
-    const treasury = await view("get_treasury", { community_id: communityId });
-    const policies = await view("get_policies", { community_id: communityId });
-    const campaigns = await Promise.all(community.campaign_ids.map((id) => view("get_campaign", { campaign_id: id })));
-    const assets = await Promise.all(community.asset_ids.map((id) => view("get_asset", { asset_id: id })));
+    const [c, t, policies] = await Promise.all([
+      view("get_community", { community_id: communityId }),
+      view("get_treasury", { community_id: communityId }),
+      view("get_policies", { community_id: communityId }),
+    ]);
+    community = c;
+    const [campaigns, assets] = await Promise.all([
+      Promise.all(community.campaign_ids.map((id) => view("get_campaign", { campaign_id: id }))),
+      Promise.all(community.asset_ids.map((id) => view("get_asset", { asset_id: id }))),
+    ]);
+    const distributions = await Promise.all(
+      community.asset_ids.map((id) => view("get_distributions", { asset_id: id }))
+    );
+    pageStatus("");
     el("content").style.display = "block";
-    renderCommunity(community, treasury, policies, campaigns, assets);
+    renderCommunity(community, t, policies, campaigns, assets, distributions);
   } catch (e) {
     pageStatus("Could not load this community: " + String(e.message).slice(0, 160));
   }
 }
 
-function renderCommunity(c, t, policies, campaigns, assets) {
+// Sum what each member deposited across every campaign, and what each
+// member has been paid across every distribution. Both come from live
+// contract state; members who never deposited or were never paid show 0.
+function aggregateDeposits(members, campaigns) {
+  const totals = new Map(members.map((m) => [m, 0n]));
+  for (const camp of campaigns) {
+    for (const [account, amount] of camp.contributors) {
+      totals.set(account, (totals.get(account) || 0n) + BigInt(amount));
+    }
+  }
+  return [...totals.entries()]
+    .map(([account, amount]) => ({ account, amount }))
+    .sort((a, b) => (b.amount > a.amount ? 1 : b.amount < a.amount ? -1 : 0));
+}
+function aggregatePayouts(members, distributions) {
+  const totals = new Map(members.map((m) => [m, 0n]));
+  for (const list of distributions) {
+    for (const record of list) {
+      for (const [account, amount] of record.payouts) {
+        totals.set(account, (totals.get(account) || 0n) + BigInt(amount));
+      }
+    }
+  }
+  return new Map([...totals.entries()].map(([account, amount]) => [account, amount]));
+}
+function shortName(account) {
+  return String(account).split(".")[0];
+}
+
+function renderCommunity(c, t, policies, campaigns, assets, distributions) {
   el("cName").textContent = c.name;
   el("cMeta").textContent = c.description + "  DAO: " + c.dao_id + "  Members: " + c.members.join(", ");
   el("daoLink").href = "https://testnet.nearblocks.io/address/" + c.dao_id;
@@ -36,20 +75,47 @@ function renderCommunity(c, t, policies, campaigns, assets) {
   // Four separate figures, never combined into one total: verified
   // revenue (onchain deposits only), expenses, retained reserves, and
   // distributable revenue. Treasury detail follows below them.
+  const onchainRevenue = assets.reduce((sum, a) => sum + BigInt(a.revenue_onchain), 0n);
+  const expenseCount = assets.reduce((n, a) => n + (a.expense_count || 0), 0);
+  const paidMembers = aggregatePayouts(c.members, distributions);
+  const paidCount = [...paidMembers.values()].filter((v) => v > 0n).length;
   const cards = [
-    ["Verified revenue", fmtYocto(t.total_revenue) + " NEAR"],
-    ["Expenses", fmtYocto(t.total_expenses) + " NEAR"],
-    ["Retained reserves", fmtYocto(t.retained) + " NEAR"],
-    ["Distributable revenue", fmtYocto(t.distributable) + " NEAR"],
-    ["Treasury balance", fmtYocto(t.treasury) + " NEAR"],
-    ["Locked in open campaigns", fmtYocto(t.locked) + " NEAR"],
-    ["Spendable now", fmtYocto(t.spendable) + " NEAR"],
-    ["Total contributed", fmtYocto(t.total_contributions) + " NEAR"],
-    ["Total paid out to members", fmtYocto(t.total_payouts) + " NEAR"],
-    ["Attestation bonds held", fmtYocto(t.total_bonds_held) + " NEAR"],
+    ["Verified revenue", fmtYocto(t.total_revenue) + " NEAR", fmtYocto(onchainRevenue) + " NEAR recorded onchain", "tone-green"],
+    ["Expenses", fmtYocto(t.total_expenses) + " NEAR", expenseCount + (expenseCount === 1 ? " expense recorded" : " expenses recorded"), "tone-amber"],
+    ["Retained reserves", fmtYocto(t.retained) + " NEAR", (c.policy.treasury_bp / 100) + "% of each distribution", "tone-blue"],
+    ["Distributable revenue", fmtYocto(t.distributable) + " NEAR", BigInt(t.distributable) > 0n ? "ready for the next distribution" : "nothing waiting to share", "tone-purple"],
+    ["Treasury balance", fmtYocto(t.treasury) + " NEAR", "held by the contract", "tone-green"],
+    ["Locked in open campaigns", fmtYocto(t.locked) + " NEAR", "in open campaigns", "tone-blue"],
+    ["Spendable now", fmtYocto(t.spendable) + " NEAR", "treasury minus locked campaign funds", "tone-amber"],
+    ["Total contributed", fmtYocto(t.total_contributions) + " NEAR", "from " + c.members.length + " members", "tone-purple"],
+    ["Total paid out to members", fmtYocto(t.total_payouts) + " NEAR", paidCount + (paidCount === 1 ? " member paid" : " members paid"), "tone-green"],
+    ["Attestation bonds held", fmtYocto(t.total_bonds_held) + " NEAR", BigInt(t.total_bonds_held) > 0n ? "held while attestations are open" : "no bonds held right now", "tone-blue"],
   ];
-  el("treasuryCards").innerHTML = cards.map(([k, v]) =>
-    '<div class="card"><div class="muted small">' + escapeHtml(k) + '</div><div class="big">' + escapeHtml(v) + "</div></div>").join("");
+  el("treasuryCards").innerHTML = cards.map(([k, v, sub, tone]) =>
+    '<div class="card ' + tone + '"><div class="label">' + escapeHtml(k) + '</div><div class="big">' + escapeHtml(v) + '</div><div class="sub">' + escapeHtml(sub) + "</div></div>").join("");
+
+  // Member deposits and payouts: one card per member, two bars on one
+  // scale, so a payout bar is directly comparable to a deposit bar.
+  const deposits = aggregateDeposits(c.members, campaigns);
+  const payouts = aggregatePayouts(c.members, distributions);
+  const totalDeposited = deposits.reduce((sum, d) => sum + d.amount, 0n);
+  const maxAmount = deposits.reduce((m, d) => (d.amount > m ? d.amount : m), 0n);
+  const pct = (amount, total) => (total > 0n ? Number((amount * 100n) / total) : 0);
+  el("deposits").innerHTML =
+    '<p class="legend"><span><i class="dot blue"></i>Deposited</span><span><i class="dot green"></i>Paid out</span></p>' +
+    (deposits.length ? deposits.map((d, i) => {
+      const paid = payouts.get(d.account) || 0n;
+      const depW = maxAmount > 0n ? Number((d.amount * 100n) / maxAmount) : 0;
+      const payW = maxAmount > 0n ? Number((paid * 100n) / maxAmount) : 0;
+      const back = d.amount > 0n ? Math.round(Number((paid * 100n) / d.amount)) : 0;
+      return '<div class="panel dep-card"><div class="dep-head"><span class="member-dot tone-' + (i % 4) + '">' +
+        escapeHtml(shortName(d.account)[0].toUpperCase()) + '</span>' + escapeHtml(shortName(d.account)) +
+        ' <span class="full">' + escapeHtml(d.account) + '</span></div>' +
+        '<div class="dep-row"><span><i class="dot blue"></i>Deposited</span><span class="amt">' + fmtYocto(d.amount) + ' NEAR · ' + pct(d.amount, totalDeposited) + '% of all deposits</span></div>' +
+        '<div class="bar-track"><i class="bar-fill dep" style="width:' + depW + '%"></i></div>' +
+        '<div class="dep-row"><span><i class="dot green"></i>Paid out</span><span class="amt">' + fmtYocto(paid) + ' NEAR' + (d.amount > 0n ? ' · ' + back + '% back' : '') + '</span></div>' +
+        '<div class="bar-track"><i class="bar-fill pay" style="width:' + payW + '%"></i></div></div>';
+    }).join("") : "<p>No deposits yet.</p>");
 
   const steps = [
     "Fund a campaign: members contribute until the target is reached.",

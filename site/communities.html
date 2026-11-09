@@ -62,24 +62,44 @@ function slugify(name) {
 }
 async function load() {
   if (!deployed()) { el("notDeployed").style.display = ""; return; }
+  pageStatus("Loading communities…");
   try {
     const stats = await view("get_stats", {});
-    el("stats").innerHTML =
-      '<div class="card"><div class="label">Communities</div><div class="big">' + stats.community_count + '</div></div>' +
-      '<div class="card"><div class="label">Assets</div><div class="big">' + stats.asset_count + '</div></div>' +
-      '<div class="card"><div class="label">Total revenue</div><div class="big">' + fmtYocto(stats.total_revenue) + ' NEAR</div></div>' +
-      '<div class="card"><div class="label">Total payouts</div><div class="big">' + fmtYocto(stats.total_payouts) + ' NEAR</div></div>';
     const ids = await view("list_communities", {});
-    let html = "";
-    for (const id of ids) {
+    const rows = await Promise.all(ids.map(async (id) => {
       const c = await view("get_community", { community_id: id });
       const t = await view("get_treasury", { community_id: id });
-      html += '<div class="panel"><h3><a href="community.html?id=' + escapeHtml(id) + '">' + escapeHtml(c.name) + '</a></h3>' +
+      const camps = await Promise.all(c.campaign_ids.map((cid) => view("get_campaign", { campaign_id: cid })));
+      return { id, c, t, camps };
+    }));
+    const totalMembers = rows.reduce((n, r) => n + r.c.members.length, 0);
+    el("stats").innerHTML =
+      '<div class="card tone-green"><div class="label">Communities</div><div class="big">' + stats.community_count + '</div><div class="sub">' + stats.community_count + (stats.community_count === 1 ? ' live on testnet' : ' live on testnet') + '</div></div>' +
+      '<div class="card tone-blue"><div class="label">Assets</div><div class="big">' + stats.asset_count + '</div><div class="sub">owned by ' + stats.community_count + (stats.community_count === 1 ? ' community' : ' communities') + '</div></div>' +
+      '<div class="card tone-amber"><div class="label">Total revenue</div><div class="big">' + fmtYocto(stats.total_revenue) + ' NEAR</div><div class="sub">from ' + stats.asset_count + (stats.asset_count === 1 ? ' asset' : ' assets') + '</div></div>' +
+      '<div class="card tone-purple"><div class="label">Total payouts</div><div class="big">' + fmtYocto(stats.total_payouts) + ' NEAR</div><div class="sub">to ' + totalMembers + ' members</div></div>';
+    let html = "";
+    for (const [i, r] of rows.entries()) {
+      const { id, c, t, camps } = r;
+      const raised = camps.reduce((s, camp) => s + BigInt(camp.raised), 0n);
+      const target = camps.reduce((s, camp) => s + BigInt(camp.target), 0n);
+      const funded = target > 0n ? Number((raised * 100n) / target) : 0;
+      const tag = camps.length === 0 ? "" : camps.every((camp) => camp.status === "Acquired")
+        ? ' <span class="tag ok">Acquired</span>' : ' <span class="tag warn">Funding</span>';
+      const dots = c.members.map((m, j) =>
+        '<span class="member-dot tone-' + ((i + j) % 4) + '" title="' + escapeHtml(m) + '">' +
+        escapeHtml(m.split(".")[0][0].toUpperCase()) + '</span>').join("");
+      html += '<div class="panel"><h3><a href="community.html?id=' + escapeHtml(id) + '">' + escapeHtml(c.name) + '</a>' + tag + '</h3>' +
         '<p class="muted">' + escapeHtml(c.description || "") + '</p>' +
-        '<p class="small">Members: ' + c.members.map(escapeHtml).join(", ") + '<br>' +
-        'Treasury: ' + fmtYocto(t.treasury) + ' NEAR &nbsp; Locked: ' + fmtYocto(t.locked) + ' NEAR &nbsp; DAO: ' + escapeHtml(c.dao_id) + '</p></div>';
+        '<div class="member-dots">' + dots + '<span class="small muted" style="align-self:center">' + c.members.length + ' members</span></div>' +
+        (camps.length
+          ? '<div class="progress"><i style="width:' + funded + '%"></i></div>' +
+            '<p class="small muted">Funded ' + fmtYocto(raised) + ' of ' + fmtYocto(target) + ' NEAR · ' + funded + '%</p>'
+          : "") +
+        '<p class="small">Treasury: ' + fmtYocto(t.treasury) + ' NEAR &nbsp; Locked: ' + fmtYocto(t.locked) + ' NEAR &nbsp; DAO: ' + escapeHtml(c.dao_id) + '</p></div>';
     }
     el("list").innerHTML = html || '<p class="muted">No communities yet.</p>';
+    pageStatus("");
   } catch (e) { pageStatus("Could not load communities: " + String(e.message).slice(0, 200)); }
 }
 async function createCommunity() {

@@ -111,6 +111,7 @@ also covered by the unit tests and the maths scripts.
 | Dispute bob's entry as carol, DAO upholds | Entry Rejected; bob's points 0; total revenue 3.1 NEAR (bond included) |
 | Propose a spending cap change, wait the timelock, execute | Cap changes from 1 to 2 NEAR; the old cap stayed in force until execution |
 | Execute the distribution | Alice 0.507, bob 0.351, carol 0.351, dave 0.351 NEAR; payouts + retention + maintenance = 2.6 exactly |
+| Open the community page on the site | A "Member deposits and payouts" chart shows each member's deposits and payouts as bars on one scale, read live from the contract; treasury cards carry a one-line source for every figure |
 | Run `node scripts/verify.mjs --contract ownground.testnet --community lagos-energy-cooperative` | All checks PASS with numbers (30/30 live) |
 | Run `node site/classify.test.cjs` | 22 checks PASS; no failure message is ever a bare "transaction failed" |
 
