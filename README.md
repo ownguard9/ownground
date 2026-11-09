@@ -412,6 +412,9 @@ Trezu: Trezu (https://trezu.org) is a Sputnik-DAO-compatible treasury UI, but it
   eight gaps with their fixes, the strengthened economics and the four
   safeguards, and the demo flow.
 - `HOLE_REPORT.md` — the original hole and gap report.
+- `skill.md` — the agent method reference: the five phases, money
+  rules, safety rules, and the worked v4 demo, written for an agent
+  to follow.
 - `contract/` — one Rust contract (near-sdk), seven internal modules,
   156 unit tests, plus the v4 security integration tests
   (`contract/tests/v4_security.rs`, 9 tests with a real Sputnik DAO
