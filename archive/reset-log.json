@@ -1,0 +1,15 @@
+{
+  "contract": "ownground.testnet",
+  "delete_tx": "BMdcyJK4XdMUkWuvgNjVbNNa2q6KaQfjh5FfH4jtERds",
+  "deploy_tx": "Bo74iv8no2KHHb9JdT9dKaNKZxHX9yE5KXazwDdqnMHr",
+  "init_tx": "5SXFaaGJmxrBXNGrXJVPWfAHKu29GG15qN1YzFXzBpAD",
+  "get_stats": {
+    "community_count": 0,
+    "campaign_count": 0,
+    "asset_count": 0,
+    "total_treasury": "0",
+    "total_revenue": "0",
+    "total_payouts": "0"
+  },
+  "list_communities": []
+}

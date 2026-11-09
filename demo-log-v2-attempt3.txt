@@ -1,0 +1,194 @@
+
+== Step 0: Setup check
+   ok alice.ownground2.testnet holds at least 2.6 NEAR (has 6.500)
+   ok bob.ownground2.testnet holds at least 2.6 NEAR (has 3.000)
+   ok carol.ownground2.testnet holds at least 2.6 NEAR (has 3.000)
+   ok dave.ownground2.testnet holds at least 2.6 NEAR (has 3.000)
+   DAO is lagos-energy2.testnet, seller is seller.ownground2.testnet, contract is ownground2.testnet
+
+== Step 1: Create the community (founding policies set here)
+Receipt: EPdMXpzy4Qm4qUThETph6AeLJjBPrtELtHEPh4SfcwF8
+	Log [ownground2.testnet]: {"standard":"ownground","version":"1.0.0","event":"community_created","data":{"community_id":"lagos-energy-cooperative-3"}}
+   ok 4 members fixed at creation
+   ok founding members share 60%: 0.000 NEAR
+   ok founding spending cap 1 NEAR: 1.000 NEAR
+
+== Step 2: Create the generator campaign, target 10 NEAR
+Receipt: 2BVycW1d5JshR5HnzuoiFrSPUduc1647jBzZg12BTJyE
+	Log [ownground2.testnet]: {"standard":"ownground","version":"1.0.0","event":"campaign_created","data":{"campaign_id":"lagos-energy-cooperative-3-c2","target":"10000000000000000000000000"}}
+   campaign id is lagos-energy-cooperative-3-c2
+   ok campaign target 10 NEAR: 10.000 NEAR
+
+== Step 3: Four members contribute 2.5 NEAR each
+Receipt: 6dNBXreuvoe2Ps2SBV77DAbsdzkhtVXMKQHiAJgmNHsZ
+	Log [ownground2.testnet]: {"standard":"ownground","version":"1.0.0","event":"contributed","data":{"campaign_id":"lagos-energy-cooperative-3-c2","contributor":"alice.ownground2.testnet","amount":"2500000000000000000000000","raised":"2500000000000000000000000"}}
+   alice.ownground2.testnet contributed 2.5 NEAR
+Receipt: EgeDoYQeuXQsE24yXjNafJzgWLvqHSJ9ffhuuPtmJ4hN
+	Log [ownground2.testnet]: {"standard":"ownground","version":"1.0.0","event":"contributed","data":{"campaign_id":"lagos-energy-cooperative-3-c2","contributor":"bob.ownground2.testnet","amount":"2500000000000000000000000","raised":"5000000000000000000000000"}}
+   bob.ownground2.testnet contributed 2.5 NEAR
+Receipt: AC53bVJ5HyjBnfWw2LmfHRc8CcFjm8ebRS9ets7Rd4bk
+	Log [ownground2.testnet]: {"standard":"ownground","version":"1.0.0","event":"contributed","data":{"campaign_id":"lagos-energy-cooperative-3-c2","contributor":"carol.ownground2.testnet","amount":"2500000000000000000000000","raised":"7500000000000000000000000"}}
+   carol.ownground2.testnet contributed 2.5 NEAR
+Receipt: Gpdbd1BRVz5GLNjnXtdGo6subWBwtGFJXP7qvPiPVuhZ
+	Log [ownground2.testnet]: {"standard":"ownground","version":"1.0.0","event":"contributed","data":{"campaign_id":"lagos-energy-cooperative-3-c2","contributor":"dave.ownground2.testnet","amount":"2500000000000000000000000","raised":"10000000000000000000000000"}}
+   dave.ownground2.testnet contributed 2.5 NEAR
+   ok raised 10 NEAR: 10.000 NEAR
+   ok campaign Funded
+
+== Step 4: DAO acquires the generator, 10 NEAR to the seller
+   DAO proposal 8: Acquire the generator for 10 NEAR
+   alice.ownground2.testnet voted Approve on proposal 8
+Receipts: GEC53rDNfccF6mnfAUR3Zi7g7nfRC7rYXqUwkSecvxVs, EdekkofhgRBiS55TMRQfmWrssYGZkPoAAXTFeoRy2uy, DoFwZB1duz4WzEdYm4zzfJZNyGPSrYJuhRekFbVRQQyW
+	Log [lagos-energy2.testnet]: {"standard":"ownground","version":"1.0.0","event":"asset_acquired","data":{"asset_id":"lagos-energy-cooperative-3-a2","campaign_id":"lagos-energy-cooperative-3-c2","seller":"seller.ownground2.testnet","value":"10000000000000000000000000"}}
+   bob.ownground2.testnet voted Approve on proposal 8
+   ok acquisition proposal Approved
+   ok seller received 10 NEAR: 10.000 NEAR
+   asset id is lagos-energy-cooperative-3-a2
+   ok asset value 10 NEAR: 10.000 NEAR
+   ok asset seller recorded
+
+== Step 5: Alice records 3 NEAR onchain revenue
+Receipt: E6nspsDAfmoKq5URSvmKwhpm3HMv5qFnFUA5Bo3wKwtg
+	Log [ownground2.testnet]: {"standard":"ownground","version":"1.0.0","event":"revenue_recorded","data":{"asset_id":"lagos-energy-cooperative-3-a2","amount":"3000000000000000000000000","reference":"invoice-001","status":"Onchain"}}
+   ok entry 0 Onchain (deposit confirmed)
+   ok alice work points 0 (onchain deposit earns no points): 0.000 NEAR
+
+== Step 6: Bob records 1 NEAR reported revenue (proof: unverified earns no points)
+Receipt: 2aEMsdDk17SyEWEJopkqvTcBgZDaYcprhfuDbny56ge5
+	Log [ownground2.testnet]: {"standard":"ownground","version":"1.0.0","event":"revenue_recorded","data":{"asset_id":"lagos-energy-cooperative-3-a2","amount":"1000000000000000000000000","reference":"invoice-002","status":"Pending"}}
+   ok entry 1 Reported, not independently verified
+   ok PROOF 3: unverified revenue earns no points: 0.000 NEAR
+
+== Step 7: Alice attests bob's entry with a 0.1 NEAR bond (proof: verified activity earns points)
+Receipt: 59ofYqDZs5yktpMnJMP7UTrfWaAzgYomRaPVt5iz4fre
+	Log [ownground2.testnet]: {"standard":"ownground","version":"1.0.0","event":"revenue_attested","data":{"asset_id":"lagos-energy-cooperative-3-a2","entry_id":1,"attestor":"alice.ownground2.testnet","points_awarded":2}}
+   ok entry 1 Verified by attestation
+   ok PROOF 4: bob work points 2 (1 + 1 per NEAR): 0.000 NEAR
+   ok bond held 0.1 NEAR: 0.100 NEAR
+
+== Step 8: DAO tries a 2 NEAR expense (proof: excessive expense fails onchain with the reason)
+   DAO proposal 9: Pay 2 NEAR for operations
+   alice.ownground2.testnet voted Approve on proposal 9
+Receipts: GGJMjoykm7UjM2d2htVH8APvpvppqzbbHJTfwi3ktFvQ, 7UCH9Tsjtm1TWWibtngaX8m2CS5Dep84KFsvMAzmKUXW
+	Failure [lagos-energy2.testnet]: Error: {"index":0,"kind":{"index":0,"kind":{"FunctionCallError":{"ExecutionError":"Smart contract panicked: panicked at src/lib.rs:1087:13:\nexpense exceeds max_single_expense"}}}}
+   bob.ownground2.testnet voted Approve on proposal 9 (execution failed: {"index":0,"kind":{"index":0,"kind":{"FunctionCallError":{"ExecutionError":"Smart contract panicked: panicked at src/lib.rs:1087:13:\nexpens)
+   ok PROOF 2: no expense recorded after the over-cap attempt: 0.000 NEAR
+   ok treasury still 3 NEAR after the failed expense
+   ok PROOF 2: the contract panic names the rule (receipts showed: {"index":0,"kind":{"index":0,"kind":{"FunctionCallError":{"ExecutionError":"Smart contract panicked: panicked at src/lib.rs:1087:13:\nexpense exceeds max_single_expense"}}}})
+
+== Step 9: DAO pays a 0.5 NEAR operations expense (proof: valid expense succeeds)
+   DAO proposal 10: Pay 0.5 NEAR for operations
+   alice.ownground2.testnet voted Approve on proposal 10
+Receipts: 5QPRcPRbMPVFmdY3guTpbF8bc93pGGAeGekihVFxTNJs, 9q5G6rEgnXMEmNdY873L68RhGN9zidkZ68mS4JddXGrF, JAgXCpzf8az1YECModSK3RUQJAutV8bVjn5k9ghQzsdC
+	Log [lagos-energy2.testnet]: {"standard":"ownground","version":"1.0.0","event":"expense_paid","data":{"asset_id":"lagos-energy-cooperative-3-a2","amount":"500000000000000000000000","recipient":"ops.ownground2.testnet"}}
+   bob.ownground2.testnet voted Approve on proposal 10
+   ok PROOF 1: expense 0.5 NEAR recorded: 0.500 NEAR
+   ok treasury 2.5 NEAR after the expense: 2.500 NEAR
+
+== Step 10: DAO proposes raising the spending cap from 1 to 2 NEAR (amendment timelock starts)
+   DAO proposal 11: Propose spending cap 1 to 2 NEAR
+   alice.ownground2.testnet voted Approve on proposal 11
+Receipt: BWs379X2Eg1W1tsFTFPxEExFGgH8ZeA4Vo1obHAMM5f5
+	Log [lagos-energy2.testnet]: {"standard":"ownground","version":"1.0.0","event":"policy_amendment_proposed","data":{"community_id":"lagos-energy-cooperative-3","amendment_id":0,"policy_type":"Spending","deadline":1794222927980774484}}
+   bob.ownground2.testnet voted Approve on proposal 11
+   ok amendment 0 pending
+   ok old policy still in force while the amendment is pending: 1.000 NEAR
+
+== Step 11: Carol disputes bob's attested entry (points suspended)
+Receipt: 4LRJ1CbhJYSKCJ5S6UvRjPPSAw91vtTMEQzpPvmcCim7
+	Log [ownground2.testnet]: {"standard":"ownground","version":"1.0.0","event":"revenue_disputed","data":{"asset_id":"lagos-energy-cooperative-3-a2","entry_id":1,"disputer":"carol.ownground2.testnet","points_suspended":2}}
+   ok entry 1 Disputed, points suspended
+   ok bob current work points 0 while disputed: 0.000 NEAR
+
+== Step 12: DAO upholds the dispute: entry rejected, points removed, bond to treasury
+   DAO proposal 12: Uphold the dispute on entry 1
+   alice.ownground2.testnet voted Approve on proposal 12
+Receipt: 8gNJqayzB6dKv8kXpjVa7G3eFUhXRseCtkvyFXKZGQrR
+	Log [lagos-energy2.testnet]: {"standard":"ownground","version":"1.0.0","event":"dispute_resolved","data":{"asset_id":"lagos-energy-cooperative-3-a2","entry_id":1,"uphold":true}}
+   bob.ownground2.testnet voted Approve on proposal 12
+   ok PROOF 7: entry 1 Rejected
+   ok bond forfeited
+   ok total revenue 3.1 NEAR (3 onchain + 0.1 bond): 3.100 NEAR
+   ok no bonds held after the forfeit: 0.000 NEAR
+
+== Step 13: Execute the spending-policy amendment after the timelock
+   waiting 113s for the timelock
+Receipt: 9D4B8Mo4jfjwTFiJKixryxPYxz7FFpE8Kaumag7Z5uB
+	Log [ownground2.testnet]: {"standard":"ownground","version":"1.0.0","event":"policy_amendment_executed","data":{"community_id":"lagos-energy-cooperative-3","amendment_id":0,"policy_type":"Spending","old_params":"Spending { max_single_expense: U128(1000000000000000000000000), min_treasury_reserve: U128(1000000000000000000000000), allowed_categories: [\"maintenance\", \"operations\"] }","new_params":"Spending { max_single_expense: U128(2000000000000000000000000), min_treasury_reserve: U128(1000000000000000000000000), allowed_categories: [\"maintenance\", \"operations\"] }"}}
+   ok PROOF 8: spending cap now 2 NEAR: 2.000 NEAR
+   ok amendment 0 Executed
+
+== Step 14: Execute the distribution
+Receipts: FvdWyT7G45qacW21n5CHR5sqCk53oUnoCWL6qSxHJHRt, Akhh2rv2cY2MhZ9PA35ArgxfERVCCo3CkKYs5Q3mfBC5, EE9GbZvRKgCH8euV8vWQfssNJ5WYBa83Bncz5zaicMQD, xEzCrwS2E1zE2V9766SyxpepADAXSF1nF2ncCCjDY4L, D1qnEaGPcUuAk2mKW6FCwH7jusi3Aqkhu3defjGh9EYR, DjZN14CnQCVEqvPJoujsdzvG3vbphhvcUHEK5oMrDN9a, HoQWQX4ez56UKtcLEfAdqw6ygpU5TswrCFMqp2xmYgmb, 3vdY4kqHHTr7GjSvfV1PxfB8s6v9V4MPtyfMnvtT9Kwy, 2omi1545z215hjDNuhMJ5AbSfnvfMYtLqyH4aTdqBpEZ
+	Log [ownground2.testnet]: {"standard":"ownground","version":"1.0.0","event":"distribution_executed","data":{"asset_id":"lagos-energy-cooperative-3-a2","distribution_id":1,"epoch":1,"distributed":"2600000000000000000000000","member_total":"1560000000000000000000000","retention":"650000000000000000000000","maintenance":"390000000000000000000000"}}
+   ok D = 2.6 NEAR: 2.600 NEAR
+   ok member pool 1.56 NEAR: 1.560 NEAR
+   ok retention 0.65 NEAR: 0.650 NEAR
+   ok maintenance 0.39 NEAR: 0.390 NEAR
+   ok activity pool 0 NEAR (no verified work stands): 0.000 NEAR
+   ok ownership pool 1.56 NEAR: 1.560 NEAR
+   ok PROOF 5: alice 0.39 NEAR (ownership only, activity slice falls back): 0.390 NEAR
+   ok bob 0.39 NEAR (ownership only, points removed): 0.390 NEAR
+   ok carol 0.39 NEAR: 0.390 NEAR
+   ok dave 0.39 NEAR: 0.390 NEAR
+   ok PROOF 6: total payouts equal D exactly: 2.600 NEAR
+   ok no unpaid members
+
+== Step 15: Final state
+   ok final treasury 1.04 NEAR (retention 0.65 + maintenance 0.39 remain as reserves): 1.040 NEAR
+   ok nothing left distributable: 0.000 NEAR
+   ok epoch reset: current work points 0
+   ok epoch advanced to 1
+
+DEMO COMPLETE. All eight proofs verified:
+  1. Valid expense succeeds (0.5 NEAR operations).
+  2. Excessive expense fails onchain with the spending-policy reason.
+  3. Unverified revenue earns no points (bob 0 before attestation).
+  4. Verified activity earns points (bob 2 after attestation).
+  5. With no verified work standing at distribution, the activity slice falls back to ownership and all four equal owners get 0.39 NEAR.
+  6. Total payouts equal D exactly (2.6 NEAR).
+  7. Dispute flow: disputed, DAO upholds, entry rejected, points removed, bond to treasury.
+  8. Policy amendment flow: proposed, timelock waited, executed, cap 1 to 2 NEAR.
+
+Demo log:
+Step 0: Setup check
+   DAO is lagos-energy2.testnet, seller is seller.ownground2.testnet, contract is ownground2.testnet
+Step 1: Create the community (founding policies set here)
+Step 2: Create the generator campaign, target 10 NEAR
+   campaign id is lagos-energy-cooperative-3-c2
+Step 3: Four members contribute 2.5 NEAR each
+   alice.ownground2.testnet contributed 2.5 NEAR
+   bob.ownground2.testnet contributed 2.5 NEAR
+   carol.ownground2.testnet contributed 2.5 NEAR
+   dave.ownground2.testnet contributed 2.5 NEAR
+Step 4: DAO acquires the generator, 10 NEAR to the seller
+   DAO proposal 8: Acquire the generator for 10 NEAR
+   alice.ownground2.testnet voted Approve on proposal 8
+   bob.ownground2.testnet voted Approve on proposal 8
+   asset id is lagos-energy-cooperative-3-a2
+Step 5: Alice records 3 NEAR onchain revenue
+Step 6: Bob records 1 NEAR reported revenue (proof: unverified earns no points)
+Step 7: Alice attests bob's entry with a 0.1 NEAR bond (proof: verified activity earns points)
+Step 8: DAO tries a 2 NEAR expense (proof: excessive expense fails onchain with the reason)
+   DAO proposal 9: Pay 2 NEAR for operations
+   alice.ownground2.testnet voted Approve on proposal 9
+   bob.ownground2.testnet voted Approve on proposal 9 (execution failed: {"index":0,"kind":{"index":0,"kind":{"FunctionCallError":{"ExecutionError":"Smart contract panicked: panicked at src/lib.rs:1087:13:\nexpens)
+Step 9: DAO pays a 0.5 NEAR operations expense (proof: valid expense succeeds)
+   DAO proposal 10: Pay 0.5 NEAR for operations
+   alice.ownground2.testnet voted Approve on proposal 10
+   bob.ownground2.testnet voted Approve on proposal 10
+Step 10: DAO proposes raising the spending cap from 1 to 2 NEAR (amendment timelock starts)
+   DAO proposal 11: Propose spending cap 1 to 2 NEAR
+   alice.ownground2.testnet voted Approve on proposal 11
+   bob.ownground2.testnet voted Approve on proposal 11
+Step 11: Carol disputes bob's attested entry (points suspended)
+Step 12: DAO upholds the dispute: entry rejected, points removed, bond to treasury
+   DAO proposal 12: Uphold the dispute on entry 1
+   alice.ownground2.testnet voted Approve on proposal 12
+   bob.ownground2.testnet voted Approve on proposal 12
+Step 13: Execute the spending-policy amendment after the timelock
+   waiting 113s for the timelock
+Step 14: Execute the distribution
+Step 15: Final state
+
+Receipts file: /home/hatch/workspace/commonhold/demo-receipts-lagos-energy-cooperative-3.json (27 transactions recorded)

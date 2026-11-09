@@ -2,6 +2,8 @@
 
 **Own Together. Build Together. Grow Together.**
 
+Live site: https://ownguard.vercel.app/
+
 OwnGround is a community-owned productive asset platform on NEAR testnet.
 A community pools NEAR, acquires a productive asset through DAO governance,
 earns revenue from that asset, and distributes the earnings under an
@@ -206,7 +208,7 @@ Why the contract holds them: the locked-funds guard, the spending policy and the
 
 Trade-offs: the contract is a single custodian of pooled funds, it is unaudited, and it should only ever hold testnet NEAR. Failed-transfer reconciliation: every transfer the contract initiates carries a private callback — acquire, expense, refund (including claim refunds), distribution payouts and bond returns. If a transfer fails, the callback reverts the state change, so the operation can be retried instead of the ledger counting money that never moved: a failed acquisition puts the campaign back to Funded with no asset recorded, a failed expense is not counted, and a failed refund restores the contribution. Cancel itself moves no money — it only records one claimable refund per contributor — so there is no cancel callback; the money moves when each contributor claims, and a failed claim leaves the claim open for retry. The unit tests cover a failed transfer for every one of these operations, and the first v2 demo run proved it live: the expense transfer failed because the recipient account did not exist yet, and the expense stayed uncounted.
 
-Trezu: Trezu (https://trezu.app) is a Sputnik-DAO-compatible treasury UI, but it is production mainnet-only: we verified its UI reads a testnet Sputnik DAO in read-only guest mode, while its production backend returns errors for testnet balances and there is no live Trezu testnet payout path, so OwnGround does not use it.
+Trezu: Trezu (https://trezu.org) is a Sputnik-DAO-compatible treasury UI, but it is production mainnet-only: we verified its UI reads a testnet Sputnik DAO in read-only guest mode, while its production backend returns errors for testnet balances and there is no live Trezu testnet payout path, so OwnGround does not use it.
 
 ## Tests
 
@@ -256,6 +258,8 @@ Trezu: Trezu (https://trezu.app) is a Sputnik-DAO-compatible treasury UI, but it
 
 - **Testnet only.** No mainnet parts, no fee logic, no Trezu (see Who
   holds the money above).
+- **Demo accounts only.** The demo members, seller and DAO are test
+  accounts. No real people have used OwnGround.
 - **Deployer key held during the hackathon.** The deployer account is
   held by the builder until handover; there is no owner backdoor in the
   contract, but the deployment itself is not yet decentralised.

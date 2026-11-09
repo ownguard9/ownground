@@ -1,0 +1,25 @@
+{
+  "network": "testnet",
+  "dao_id": "lagos-energy2.testnet",
+  "dao_name": "lagos-energy2",
+  "wasm_source_dao": "genesis.sputnikv2.testnet",
+  "wasm_bytes": 469723,
+  "wasm_code_hash": "8RMeZ5cXDap6TENxaJKtigRYf3n139iHmTRe8ZUNey6N",
+  "wasm_sha256": "6e3f1814d40769d8f57b9a7af689d22aaab96d3232cec4d861311829c1d2318f",
+  "deploy_tx": "2Hv9SMj3BwFJG7Uf9qZUQoiNUruusgA9Wv2c4AC3abBZ",
+  "init_tx": "E7pU2sa1iAWh41N1WU4cVWATTpREccWTtcju1u4pLsSp",
+  "council": [
+    "alice.ownground2.testnet",
+    "bob.ownground2.testnet",
+    "carol.ownground2.testnet",
+    "dave.ownground2.testnet"
+  ],
+  "vote_threshold": "Weight 2 (2 of 4 council approvals pass a proposal)",
+  "config": {
+    "name": "lagos-energy2",
+    "purpose": "Lagos Energy Cooperative — neighbours owning a generator together",
+    "metadata": ""
+  },
+  "dao_balance_yocto": "9996353980804209700000000",
+  "created_at": "2026-11-09T10:56:26.439Z"
+}

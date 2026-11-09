@@ -1,0 +1,100 @@
+PASS desktop home loads title="OwnGround — Own Together. Build Together. Grow Together."
+PASS desktop home zero real JS errors clean
+PASS desktop home no failed local requests clean
+PASS desktop home blocked requests are external only 4 external blocked (sandbox proxy)
+PASS desktop home nav has Communities + Create Communities, Create community
+PASS desktop home footer present OwnGround runs on NEAR testnet. All figures shown are
+  real onchain state, never simulated. · GitHub
+PASS desktop home CONTRACT_ID is ownground2.testnet CONTRACT_ID=ownground2.testnet
+PASS desktop communities loads title="Communities — OwnGround"
+PASS desktop communities zero real JS errors clean
+PASS desktop communities no failed local requests clean
+PASS desktop communities blocked requests are external only 16 external blocked (sandbox proxy)
+PASS desktop communities nav has Communities + Create Communities, Create community
+PASS desktop communities footer present OwnGround runs on NEAR testnet. · GitHub
+PASS desktop communities CONTRACT_ID is ownground2.testnet CONTRACT_ID=ownground2.testnet
+PASS desktop community loads title="Community — OwnGround"
+PASS desktop community zero real JS errors clean
+PASS desktop community no failed local requests clean
+PASS desktop community blocked requests are external only 40 external blocked (sandbox proxy)
+PASS desktop community nav has Communities + Create Communities, Create community
+PASS desktop community footer present OwnGround runs on NEAR testnet. · GitHub
+PASS desktop community CONTRACT_ID is ownground2.testnet CONTRACT_ID=ownground2.testnet
+PASS desktop community shows load state, not a blank page 143 chars of body text
+PASS desktop community DAO helper loaded createDaoProposal present
+PASS desktop community allocation validator loaded validateAllocations present
+PASS desktop asset loads title="Asset — OwnGround"
+PASS desktop asset zero real JS errors clean
+PASS desktop asset no failed local requests clean
+PASS desktop asset blocked requests are external only 16 external blocked (sandbox proxy)
+PASS desktop asset nav has Communities + Create Communities, Create community
+PASS desktop asset footer present OwnGround runs on NEAR testnet. · GitHub
+PASS desktop asset CONTRACT_ID is ownground2.testnet CONTRACT_ID=ownground2.testnet
+PASS desktop asset shows load state, not a blank page 139 chars of body text
+PASS desktop asset DAO helper loaded createDaoProposal present
+PASS desktop asset allocation validator loaded validateAllocations present
+PASS desktop create loads title="Create a community — OwnGround"
+PASS desktop create zero real JS errors clean
+PASS desktop create no failed local requests clean
+PASS desktop create blocked requests are external only 4 external blocked (sandbox proxy)
+PASS desktop create nav has Communities + Create Communities, Create community
+PASS desktop create footer present OwnGround runs on NEAR testnet. · GitHub
+PASS desktop create CONTRACT_ID is ownground2.testnet CONTRACT_ID=ownground2.testnet
+PASS desktop create has create inputs + button 14 inputs, button=true
+PASS phone home loads title="OwnGround — Own Together. Build Together. Grow Together."
+PASS phone home zero real JS errors clean
+PASS phone home no failed local requests clean
+PASS phone home blocked requests are external only 4 external blocked (sandbox proxy)
+PASS phone home nav has Communities + Create Communities, Create community
+PASS phone home footer present OwnGround runs on NEAR testnet. All figures shown are
+  real onchain state, never simulated. · GitHub
+PASS phone home CONTRACT_ID is ownground2.testnet CONTRACT_ID=ownground2.testnet
+PASS phone communities loads title="Communities — OwnGround"
+PASS phone communities zero real JS errors clean
+PASS phone communities no failed local requests clean
+PASS phone communities blocked requests are external only 16 external blocked (sandbox proxy)
+PASS phone communities nav has Communities + Create Communities, Create community
+PASS phone communities footer present OwnGround runs on NEAR testnet. · GitHub
+PASS phone communities CONTRACT_ID is ownground2.testnet CONTRACT_ID=ownground2.testnet
+PASS phone community loads title="Community — OwnGround"
+PASS phone community zero real JS errors clean
+PASS phone community no failed local requests clean
+PASS phone community blocked requests are external only 40 external blocked (sandbox proxy)
+PASS phone community nav has Communities + Create Communities, Create community
+PASS phone community footer present OwnGround runs on NEAR testnet. · GitHub
+PASS phone community CONTRACT_ID is ownground2.testnet CONTRACT_ID=ownground2.testnet
+PASS phone community shows load state, not a blank page 143 chars of body text
+PASS phone community DAO helper loaded createDaoProposal present
+PASS phone community allocation validator loaded validateAllocations present
+PASS phone asset loads title="Asset — OwnGround"
+PASS phone asset zero real JS errors clean
+PASS phone asset no failed local requests clean
+PASS phone asset blocked requests are external only 16 external blocked (sandbox proxy)
+PASS phone asset nav has Communities + Create Communities, Create community
+PASS phone asset footer present OwnGround runs on NEAR testnet. · GitHub
+PASS phone asset CONTRACT_ID is ownground2.testnet CONTRACT_ID=ownground2.testnet
+PASS phone asset shows load state, not a blank page 139 chars of body text
+PASS phone asset DAO helper loaded createDaoProposal present
+PASS phone asset allocation validator loaded validateAllocations present
+PASS phone create loads title="Create a community — OwnGround"
+PASS phone create zero real JS errors clean
+PASS phone create no failed local requests clean
+PASS phone create blocked requests are external only 4 external blocked (sandbox proxy)
+PASS phone create nav has Communities + Create Communities, Create community
+PASS phone create footer present OwnGround runs on NEAR testnet. · GitHub
+PASS phone create CONTRACT_ID is ownground2.testnet CONTRACT_ID=ownground2.testnet
+PASS phone create has create inputs + button 14 inputs, button=true
+PASS src community: Onchain revenue card 
+PASS src community: forfeited bonds as own line 
+PASS src community: refund button gated on Open 
+PASS src community: cancel campaign via DAO proposal 
+PASS src community: allocation editor sums to 10000 
+PASS src community: ownership allocations shown 
+PASS src community: DAO proposal calls 5 call sites
+PASS src asset: dispute resolve via DAO 
+PASS src dao.js: add_proposal with 1 NEAR bond 
+PASS src common.js: nearLink helper defined and used defined in common.js, used by the tx-status display
+PASS src dao.js: proposal link + vote text after creation 
+PASS src config: CONTRACT_ID ownground2.testnet 
+
+ALL 96 BROWSER CHECKS PASSED

@@ -1,0 +1,98 @@
+OwnGround verify: ownground2.testnet / lagos-energy-cooperative-3
+
+PASS 1 treasury equation treasury=1.040 deposits=13.100 spent=12.060
+PASS 2 locked funds locked=0.000 computed=0.000
+PASS 2 spendable non-negative spendable=1.040
+PASS 5 refunds within contributions refunds=0.000 contributions=10.000
+PASS 10 raw balance covers treasury + storage + bonds raw=13.075 treasury=1.040 storage=0.290 bonds=0.000
+PASS P distribution policy in force founding policy
+PASS P spending policy in force amendment 0 executed
+PASS P activity policy in force founding policy
+PASS 8 spending policy present cap=2.000 reserve=1.000
+PASS 6 expense 0.500 operations within cap amount=0.500 cap=2.000
+PASS 6 expense 0.500 operations allowed category=operations
+PASS 7 entry 0 onchain deposit earns no points alice.ownground2.testnet Onchain points=0
+PASS 7 lifetime work points for bob.ownground2.testnet lifetime=2 awarded=2
+PASS 7 current points within lifetime (epoch > 0) epoch=1
+PASS 7 capital points recorded, display only alice.ownground2.testnet=2, bob.ownground2.testnet=2, carol.ownground2.testnet=2, dave.ownground2.testnet=2
+PASS 3 distribution 1 exact sum D=2.600 member=1.560 retention=0.650 maintenance=0.390
+PASS 3 distribution 1 member = ownership + activity member=1.560 ownership=1.560 activity=0.000
+PASS 9 distribution 1 activity pool not overpaid activity paid=0.000 pool=0.000
+PASS 9 breakdown 1 alice.ownground2.testnet total = ownership + activity total=0.390 ownership=0.390 activity=0.000
+PASS 9 breakdown 1 alice.ownground2.testnet activity matches work points work=0 activity=0.000
+PASS 9 breakdown 1 bob.ownground2.testnet total = ownership + activity total=0.390 ownership=0.390 activity=0.000
+PASS 9 breakdown 1 bob.ownground2.testnet activity matches work points work=0 activity=0.000
+PASS 9 breakdown 1 carol.ownground2.testnet total = ownership + activity total=0.390 ownership=0.390 activity=0.000
+PASS 9 breakdown 1 carol.ownground2.testnet activity matches work points work=0 activity=0.000
+PASS 9 breakdown 1 dave.ownground2.testnet total = ownership + activity total=0.390 ownership=0.390 activity=0.000
+PASS 9 breakdown 1 dave.ownground2.testnet activity matches work points work=0 activity=0.000
+PASS 4 asset lagos-energy-cooperative-3-a2 distributed_total = sum of distributions distributed_total=2.600 sum=2.600
+PASS B total bonds held = 0.1 NEAR x held entries held=0.000 entries=0
+PASS P reported entries are claims, not money 0 pending entries, none with points
+
+ALL 29 CHECKS PASSED
+
+Receipt checks: 27 demo transactions from demo-receipts-lagos-energy-cooperative-3.json
+
+PASS R create_community tx succeeded GZeBySjN62oH…
+PASS R create_community no receipt failures clean
+PASS R create_campaign tx succeeded 2XgwYJ9K52W9…
+PASS R create_campaign no receipt failures clean
+PASS R contribute tx succeeded 8uu7dHAAzYEw…
+PASS R contribute no receipt failures clean
+PASS R contribute tx succeeded HgmxJyKr5111…
+PASS R contribute no receipt failures clean
+PASS R contribute tx succeeded BnAMQDM92kDr…
+PASS R contribute no receipt failures clean
+PASS R contribute tx succeeded 3yagbDpLoC6E…
+PASS R contribute no receipt failures clean
+PASS R add_proposal tx succeeded 6TUGHhEa7XA2…
+PASS R add_proposal no receipt failures clean
+PASS R dao:acquire_asset tx succeeded FkVX5hew6o3D…
+PASS R dao:acquire_asset no receipt failures clean
+PASS R dao:acquire_asset tx succeeded 5DCJvWKhUjq4…
+PASS R dao:acquire_asset no receipt failures clean
+PASS R record_revenue tx succeeded 5PvTss3MZCBM…
+PASS R record_revenue no receipt failures clean
+PASS R record_revenue tx succeeded AusZKh8LaA38…
+PASS R record_revenue no receipt failures clean
+PASS R attest_revenue tx succeeded GYDcrhR4zHtv…
+PASS R attest_revenue no receipt failures clean
+PASS R add_proposal tx succeeded 6gfYtGsZgoBc…
+PASS R add_proposal no receipt failures clean
+PASS R dao:pay_expense tx succeeded DzTBoowa6RWH…
+PASS R dao:pay_expense no receipt failures clean
+PASS R dao:pay_expense failed onchain as expected failures: {"ActionError":{"index":0,"kind":{"FunctionCallError":{"ExecutionError":"Smart contract panicked: panicked at src/lib.rs:1087:13:\nexpense exceeds max_single_expense"}}}}
+PASS R add_proposal tx succeeded AM1aNSy44APE…
+PASS R add_proposal no receipt failures clean
+PASS R dao:pay_expense tx succeeded 9x92QuuzCUFy…
+PASS R dao:pay_expense no receipt failures clean
+PASS R dao:pay_expense tx succeeded 3m2rLn9yBuDL…
+PASS R dao:pay_expense no receipt failures clean
+PASS R add_proposal tx succeeded 6mjcMW9uRzZm…
+PASS R add_proposal no receipt failures clean
+PASS R dao:propose_policy_change tx succeeded DP2iidqxiupZ…
+PASS R dao:propose_policy_change no receipt failures clean
+PASS R dao:propose_policy_change tx succeeded 6VoFSWAR7uWR…
+PASS R dao:propose_policy_change no receipt failures clean
+PASS R dispute_revenue tx succeeded J2axMuarBXLY…
+PASS R dispute_revenue no receipt failures clean
+PASS R add_proposal tx succeeded 5K8AqLwnRWXo…
+PASS R add_proposal no receipt failures clean
+PASS R dao:resolve_dispute tx succeeded 14juBi62UoYK…
+PASS R dao:resolve_dispute no receipt failures clean
+PASS R dao:resolve_dispute tx succeeded B6ZBtjR3Azfz…
+PASS R dao:resolve_dispute no receipt failures clean
+PASS R execute_policy_change tx succeeded DUc8R5ebsGKX…
+PASS R execute_policy_change no receipt failures clean
+PASS R execute_distribution tx succeeded 8GiGLZ5qHdAS…
+PASS R execute_distribution no receipt failures clean
+PASS R seller paid the target seller=seller.ownground2.testnet value=10.000 balance delta=10.000
+PASS R expense recipient paid 0.500 recipient=ops.ownground2.testnet amount=0.500 balance delta=0.500
+PASS R payout landed for alice.ownground2.testnet alice.ownground2.testnet 0.390 balance delta=0.378 (signer: - gas 0.001 - deposit 0.010)
+PASS R payout landed for bob.ownground2.testnet bob.ownground2.testnet 0.390 balance delta=0.390
+PASS R payout landed for carol.ownground2.testnet carol.ownground2.testnet 0.390 balance delta=0.390
+PASS R payout landed for dave.ownground2.testnet dave.ownground2.testnet 0.390 balance delta=0.390
+PASS R no demo refunds to verify (unit-tested instead) demo performs no refund
+
+ALL 89 CHECKS PASSED
