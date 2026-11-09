@@ -13,7 +13,7 @@ mainnet parts.
 > `lagos-energy2.testnet`, all 17 demo steps green, `verify.mjs` 89/89
 > PASS (29 live state checks + 60 receipt checks). Not submitted yet.
 > The GitHub identity is ownguard9 and the repo is live at
-> github.com/ownguard9/ownground-. Everything below runs on NEAR testnet only.
+> github.com/ownguard9/ownground. Everything below runs on NEAR testnet only.
 > The v1 contract `ownground.testnet` is superseded: it stays deployed
 > as-is but is no longer the live deployment, because the remediation
 > changed the state layout and there is no migrate method.
