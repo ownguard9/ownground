@@ -1,0 +1,52 @@
+{
+  "network": "testnet",
+  "contract_id": "ownground3.testnet",
+  "wasm_bytes": 729778,
+  "top_ups": [
+    {
+      "from": "ownground3-funder.testnet",
+      "to": "ownground3.testnet",
+      "amount_near": "9.5",
+      "tx": "EhwhiRwRhW6n557ZhNT7v8P6aZR2dkiaYgRRC9W8NjNP"
+    },
+    {
+      "from": "ownground3-funder2.testnet",
+      "to": "ownground3.testnet",
+      "amount_near": "9.5",
+      "tx": "CLDx3xY7Ntc1sd4oAGgUFwkc6p6tAWMvtLqWfLRNdtLV"
+    },
+    {
+      "from": "ownground3-funder3.testnet",
+      "to": "ownground3.testnet",
+      "amount_near": "9.5",
+      "tx": "bXmkqZvKyVaq8y7z13T62cGkdFWCHB4MTGj1CpBDCw1"
+    },
+    {
+      "from": "ownground3-funder4.testnet",
+      "to": "ownground3.testnet",
+      "amount_near": "9.5",
+      "tx": "3E5s9heF1uAz9W6MCDKCrz9CkGp5UGokPo9h6vcEizFN"
+    }
+  ],
+  "deploy_tx": "G1mxm3Zj2nsWGTCh4EAAeso63Gvk4pHCbNeZJfAYbzFj",
+  "init_tx": "8R9znXpZ67KGCYpYH2ZUxx842sZB342Ffn38iRah69xZ",
+  "deployer_balance_yocto": "47994515496445600000000000",
+  "stats": {
+    "community_count": 0,
+    "campaign_count": 0,
+    "asset_count": 0,
+    "total_treasury": "0",
+    "total_revenue": "0",
+    "total_payouts": "0"
+  },
+  "created_at": "2026-11-09T12:23:41.849Z",
+  "redeploy": {
+    "reason": "plain cargo build wasm trapped every panic as a bare unreachable (first v3 demo stopped at step 8); redeployed the cargo-near build, which carries panic text",
+    "wasm": "cargo near build non-reproducible-wasm",
+    "wasm_bytes": 357565,
+    "wasm_sha256_hex": "cbe5deb2c79dadd1ef212ec96f79ce3681112ec4251716354e8df476fb1f7c9e",
+    "code_hash_bs58": "Eiw4XQoKCG6MtADqLhRxds9kVbEUZQCeUf5E1TZHS2PP",
+    "deploy_tx": "7m2NTFpkSqyU6RdmHTe4tFLJCKMUjG1hhWEGNJYzuiMB",
+    "note": "code-only redeploy, no new() call; the -4 partial run state persisted"
+  }
+}

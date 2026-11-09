@@ -6,19 +6,19 @@ window.BRAND_NAME = "OwnGround";
 // Public repo. The footer GitHub link reads this and nowhere else.
 window.REPO_URL = "https://github.com/ownguard9/ownground";
 
-// Contract address. v2 (remediation re-deploy) at ownground2.testnet.
-// v1 ownground.testnet is superseded — do not point the site at it.
-window.CONTRACT_ID = "ownground2.testnet";
+// Contract address. v3 (distribution-timing guard) at ownground3.testnet.
+// v2 ownground2.testnet and v1 ownground.testnet are superseded — do not
+// point the site at them.
+window.CONTRACT_ID = "ownground3.testnet";
 
 // Demo runs superseded by the receipt-verified run. The contract keeps
 // their history onchain, but the list shows only the live demo community.
-window.HIDDEN_COMMUNITIES = ["lagos-energy-cooperative", "lagos-energy-cooperative-2"];
+window.HIDDEN_COMMUNITIES = ["lagos-energy-cooperative", "lagos-energy-cooperative-2", "lagos-energy-cooperative-3", "lagos-energy-cooperative-4"];
 
 // Showcase community, pinned at the top of the list: it shows the full
 // flow (funded, asset acquired, revenue, distributions), so a new visitor
-// sees the complete picture first. Update this when the site switches to
-// the v3 contract (the v3 demo community is lagos-energy-cooperative-5).
-window.PINNED_COMMUNITIES = ["lagos-energy-cooperative-3"];
+// sees the complete picture first.
+window.PINNED_COMMUNITIES = ["lagos-energy-cooperative-5"];
 
 // Testnet only. Never point this at mainnet.
 window.NETWORK = "testnet";

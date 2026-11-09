@@ -6,19 +6,33 @@
 // against ownground2.testnet / lagos-energy2.testnet with
 // OWNGROUND_PARENT=ownground2.testnet; expected numbers are the v2
 // figures in the header below (payouts 0.39 each — see step 14).
+// V3 (distribution-timing guard) runs 19 steps against
+// ownground3.testnet / lagos-energy3.testnet with
+// OWNGROUND_PARENT=ownground3.testnet and community
+// lagos-energy-cooperative-5; expected numbers are the v3 figures
+// below (dave 0.507, the others 0.351 — see step 16). The first v3
+// attempt used community lagos-energy-cooperative-4 and stopped at
+// step 8: the wasm then deployed was a plain `cargo build` artifact
+// whose every panic trapped as a bare `unreachable`, so the over-cap
+// expense proof failed; the contract was redeployed from
+// `cargo near build non-reproducible-wasm`, which carries panic
+// messages, and the demo re-run from scratch on -5 (the -4 run
+// cannot resume — its dispute window has passed, so bob's entry can
+// no longer be disputed).
 //
 //   1. npm install near-api-js@5.1.1   (in ~/workspace/commonhold)
 //   2. Create the demo accounts on testnet and fund them:
-//      alice.ownground.testnet (6.5 NEAR), bob/carol/dave.ownground.testnet
-//      (3 NEAR each), seller.ownground.testnet (0.2 NEAR), plus the
-//      Sputnik DAO lagos-energy.testnet with the four as council,
+//      alice.ownground3.testnet (6.5 NEAR), bob/carol/dave.ownground3.testnet
+//      (3 NEAR each), seller.ownground3.testnet (0.2 NEAR), plus the
+//      Sputnik DAO lagos-energy3.testnet with the four as council,
 //      threshold 2 (absolute Weight threshold, not the factory default
 //      Ratio 1/2, which would need 3 of 4 approvals).
 //      Keys must be in ~/.near-credentials/testnet (near-cli layout).
-//      Member names are subaccounts of ownground.testnet because the
+//      Member names are subaccounts of ownground3.testnet because the
 //      top-level alice.testnet etc. are taken by other people.
-//   3. OWNGROUND_CONTRACT=ownground.testnet OWNGROUND_DAO=lagos-energy.testnet \
-//      DEMO_SELLER=seller.ownground.testnet node scripts/demo.mjs
+//   3. OWNGROUND_CONTRACT=ownground3.testnet OWNGROUND_DAO=lagos-energy3.testnet \
+//      DEMO_SELLER=seller.ownground3.testnet OWNGROUND_PARENT=ownground3.testnet \
+//      OWNGROUND_COMMUNITY=lagos-energy-cooperative-5 node scripts/demo.mjs
 //
 // The DAO is NOT a sputnikv2.testnet factory subaccount: a factory DAO is
 // keyless, but this script signs add_proposal as the DAO itself, so the DAO
@@ -28,16 +42,22 @@
 //
 // The script verifies every expected number and aborts on the first
 // mismatch. Expected final numbers (DESIGN.md fix 11 and 15, as
-// revised when onchain deposits stopped earning work points):
-//   D = 2.6 NEAR; alice 0.39, bob 0.39, carol 0.39, dave 0.39;
+// revised when onchain deposits stopped earning work points; v3 adds
+// the visible reward — dave's attested entry survives to distribution):
+//   D = 2.6 NEAR; alice 0.351, bob 0.351, carol 0.351, dave 0.507;
 //   retention 0.65, maintenance 0.39; final treasury 1.04 NEAR exactly.
 // The dispute proof runs before the distribution and is upheld, so
 // bob's 2 work points are removed and the 0.1 NEAR bond enters the
 // treasury as revenue (total_revenue 3.1, D 2.6). Alice's 3 NEAR
 // onchain deposit earns no work points (a deposit proves money moved,
-// not that the asset earned it), so no verified work stands at
-// distribution and the activity slice falls back to ownership: the
-// whole 1.56 NEAR member pool splits by ownership, 0.39 each.
+// not that the asset earned it). After the dispute resolves, dave
+// records 1 NEAR reported revenue, carol attests it (0.1 NEAR bond),
+// and nobody disputes it — so dave holds the only 2 work points at
+// distribution and takes the whole 0.156 NEAR activity pool on top of
+// his 0.351 NEAR ownership share: 0.507 NEAR against 0.351 for the
+// other three. The distribution waits out the 5-minute dispute window
+// after dave's attestation (the v3 timing guard blocks any earlier
+// payout), then carol's bond is released in full before the payout.
 //
 // Demo accounts are test accounts only. Nothing here is mainnet.
 import fs from "node:fs";
@@ -53,8 +73,9 @@ const CONTRACT = process.env.OWNGROUND_CONTRACT;
 const DAO = process.env.OWNGROUND_DAO;
 const SELLER = process.env.DEMO_SELLER;
 // Member subaccounts live under one parent account: ownground.testnet
-// for v1, ownground2.testnet for v2 (OWNGROUND_PARENT). The demo's
-// expected numbers are the same on either parent.
+// for v1, ownground2.testnet for v2, ownground3.testnet for v3
+// (OWNGROUND_PARENT). The demo's expected numbers are the v3 figures
+// in the header above.
 const PARENT = process.env.OWNGROUND_PARENT || 'ownground.testnet';
 const MEMBERS = ["alice", "bob", "carol", "dave"].map((r) => `${r}.${PARENT}`);
 const OPS = `ops.${PARENT}`;
@@ -444,8 +465,27 @@ const t6 = await view("get_treasury", { community_id: COMMUNITY });
 assertEq(t6.total_revenue, 31n * N / 10n, "total revenue 3.1 NEAR (3 onchain + 0.1 bond)");
 assertEq(t6.total_bonds_held, 0, "no bonds held after the forfeit");
 
-// --- Step 13: execute the amendment (proof 8, part 2) --------------------
-step(13, "Execute the spending-policy amendment after the timelock");
+// --- Step 13: the visible reward (v3) -------------------------------------
+// After the dispute resolves, dave records 1 NEAR reported revenue and
+// carol attests it with a 0.1 NEAR bond. Nobody disputes it, so dave's
+// 2 work points stand at distribution — the activity pool will pay
+// him, visibly, on top of his ownership share.
+step(13, "Dave records 1 NEAR reported revenue, carol attests it (the visible reward)");
+await callAs(DAVE, "record_revenue", {
+  asset_id: ASSET_ID, amount: N.toString(), source: "Generator rental", reference: "invoice-003",
+}, (N / 100n).toString());
+await callAs(CAROL, "attest_revenue", { asset_id: ASSET_ID, entry_id: 2 }, ((N / 10n) + (N / 100n)).toString());
+const rev6 = await view("get_revenue", { asset_id: ASSET_ID });
+assertTrue(rev6[2].status === "Verified", "entry 2 Verified by attestation");
+assertEq(rev6[2].points_awarded, 2, "dave work points 2 (1 + 1 per NEAR)");
+assertTrue(rev6[2].recorded_by === DAVE, "entry 2 recorded by dave");
+assertTrue(rev6[2].attestor === CAROL, "entry 2 attested by carol (a different member)");
+const t7 = await view("get_treasury", { community_id: COMMUNITY });
+assertEq(t7.total_bonds_held, N / 10n, "carol's bond held 0.1 NEAR");
+const daveVerifiedAt = Number(BigInt(rev6[2].verified_at) / 1000000n); // ms
+
+// --- Step 14: execute the amendment (proof 8, part 2) --------------------
+step(14, "Execute the spending-policy amendment after the timelock");
 const waitMs = amendmentDeadline - Date.now() + 5000;
 if (waitMs > 0) { note(`waiting ${Math.round(waitMs / 1000)}s for the timelock`); await sleep(waitMs); }
 await callAs(ALICE, "execute_policy_change", { community_id: COMMUNITY, amendment_id: 0 }, (N / 100n).toString());
@@ -453,8 +493,22 @@ const pol2 = await view("get_policies", { community_id: COMMUNITY });
 assertEq(pol2.spending.max_single_expense, 2n * N, "PROOF 8: spending cap now 2 NEAR");
 assertTrue(pol2.amendments[0].status === "Executed", "amendment 0 Executed");
 
-// --- Step 14: distribution (proofs 5 and 6) ------------------------------
-step(14, "Execute the distribution");
+// --- Step 15: wait out the dispute window, release the bond ---------------
+// The v3 distribution-timing guard blocks any payout while dave's
+// entry is Verified but still inside its 5-minute dispute window, so
+// the demo waits the window out — then carol's bond is released in
+// full (an undisputed attestation costs the attestor nothing).
+step(15, "Wait out the dispute window, then carol's bond is released in full");
+const windowWaitMs = daveVerifiedAt + 300000 - Date.now() + 5000;
+if (windowWaitMs > 0) { note(`waiting ${Math.round(windowWaitMs / 1000)}s for the dispute window`); await sleep(windowWaitMs); }
+await callAs(CAROL, "release_attestation_bond", { asset_id: ASSET_ID, entry_id: 2 }, (N / 100n).toString());
+const rev7 = await view("get_revenue", { asset_id: ASSET_ID });
+assertTrue(rev7[2].bond_status === "Released", "carol's bond released after the window passed undisputed");
+const t8 = await view("get_treasury", { community_id: COMMUNITY });
+assertEq(t8.total_bonds_held, 0, "no bonds held after the release");
+
+// --- Step 16: distribution (proofs 5 and 6) ------------------------------
+step(16, "Execute the distribution");
 await callAs(ALICE, "execute_distribution", { asset_id: ASSET_ID }, (N / 100n).toString());
 const dists = await view("get_distributions", { asset_id: ASSET_ID });
 const d = dists[0];
@@ -462,13 +516,16 @@ assertEq(d.distributed, 26n * N / 10n, "D = 2.6 NEAR");
 assertEq(d.member_total, 156n * N / 100n, "member pool 1.56 NEAR");
 assertEq(d.retention, 65n * N / 100n, "retention 0.65 NEAR");
 assertEq(d.maintenance, 39n * N / 100n, "maintenance 0.39 NEAR");
-assertEq(d.activity_pool, 0, "activity pool 0 NEAR (no verified work stands)");
-assertEq(d.ownership_pool, 156n * N / 100n, "ownership pool 1.56 NEAR");
+assertEq(d.activity_pool, 156n * N / 1000n, "activity pool 0.156 NEAR (all to dave)");
+assertEq(d.ownership_pool, 1404n * N / 1000n, "ownership pool 1.404 NEAR");
 const payout = (acct) => BigInt(d.payouts.find(([a]) => a === acct)?.[1] ?? 0);
-assertEq(payout(ALICE), 390n * N / 1000n, "PROOF 5: alice 0.39 NEAR (ownership only, activity slice falls back)");
-assertEq(payout(BOB), 390n * N / 1000n, "bob 0.39 NEAR (ownership only, points removed)");
-assertEq(payout(CAROL), 390n * N / 1000n, "carol 0.39 NEAR");
-assertEq(payout(DAVE), 390n * N / 1000n, "dave 0.39 NEAR");
+assertEq(payout(ALICE), 351n * N / 1000n, "alice 0.351 NEAR (ownership only)");
+assertEq(payout(BOB), 351n * N / 1000n, "bob 0.351 NEAR (ownership only, points removed)");
+assertEq(payout(CAROL), 351n * N / 1000n, "carol 0.351 NEAR (ownership only)");
+assertEq(payout(DAVE), 507n * N / 1000n, "PROOF 5: dave 0.507 NEAR — 0.351 ownership + the whole 0.156 activity pool");
+const actPay = (acct) => BigInt(d.activity_payouts.find(([a]) => a === acct)?.[1] ?? 0);
+assertEq(actPay(DAVE), 156n * N / 1000n, "PROOF 5: dave's activity payout is the whole activity pool");
+assertEq(actPay(ALICE) + actPay(BOB) + actPay(CAROL), 0, "no activity payout to anyone without work points");
 assertEq(
   payout(ALICE) + payout(BOB) + payout(CAROL) + payout(DAVE) + BigInt(d.retention) + BigInt(d.maintenance),
   BigInt(d.distributed),
@@ -476,23 +533,25 @@ assertEq(
 );
 assertTrue(d.unpaid.length === 0, "no unpaid members");
 
-// --- Step 15: final state -------------------------------------------------
-step(15, "Final state");
+// --- Step 17: final state -------------------------------------------------
+step(17, "Final state");
 const tf = await view("get_treasury", { community_id: COMMUNITY });
 assertEq(tf.treasury, 104n * N / 100n, "final treasury 1.04 NEAR (retention 0.65 + maintenance 0.39 remain as reserves)");
 assertEq(tf.distributable, 0, "nothing left distributable");
+assertEq(tf.total_bonds_held, 0, "no bonds held at the end");
 const actF = await view("get_activity", { asset_id: ASSET_ID });
 assertTrue(actF.work_points.every(([, p]) => p.current === 0), "epoch reset: current work points 0");
 assertTrue(actF.epoch === 1, "epoch advanced to 1");
 
-console.log("\nDEMO COMPLETE. All eight proofs verified:");
+console.log("\nDEMO COMPLETE. All nine proofs verified:");
 console.log("  1. Valid expense succeeds (0.5 NEAR operations).");
 console.log("  2. Excessive expense fails onchain with the spending-policy reason.");
 console.log("  3. Unverified revenue earns no points (bob 0 before attestation).");
 console.log("  4. Verified activity earns points (bob 2 after attestation).");
-console.log("  5. With no verified work standing at distribution, the activity slice falls back to ownership and all four equal owners get 0.39 NEAR.");
+console.log("  5. The activity slice pays the worker: dave 0.507 NEAR against 0.351 for the others — his attested, undisputed entry earned the whole 0.156 NEAR activity pool.");
 console.log("  6. Total payouts equal D exactly (2.6 NEAR).");
 console.log("  7. Dispute flow: disputed, DAO upholds, entry rejected, points removed, bond to treasury.");
 console.log("  8. Policy amendment flow: proposed, timelock waited, executed, cap 1 to 2 NEAR.");
+console.log("  9. An undisputed attestation's bond is returned in full after the dispute window (carol's 0.1 NEAR).");
 console.log("\nDemo log:\n" + log.join("\n"));
 console.log(`\nReceipts file: ${RECEIPTS_FILE.pathname} (${receipts.length} transactions recorded)`);

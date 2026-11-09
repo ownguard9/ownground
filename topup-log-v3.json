@@ -1,0 +1,22 @@
+[
+  {
+    "to": "alice.ownground3.testnet",
+    "amount_yocto": "5782434474353280000000000",
+    "tx": "DGxhBcUa5QCnM9LvG9geNed1JBaK4UEvvm958Xsr3G9v"
+  },
+  {
+    "to": "bob.ownground3.testnet",
+    "amount_yocto": "2522096380320162400000000",
+    "tx": "7PX61mxQVTWj1SqGz8uMtqqEwgF8bugytvAeWeYqwFSi"
+  },
+  {
+    "to": "carol.ownground3.testnet",
+    "amount_yocto": "2510297289020006800000000",
+    "tx": "GifV5WkamRs8HzrJNA5rPAfZh4rqBhQHyNKkfwiWo9xS"
+  },
+  {
+    "to": "dave.ownground3.testnet",
+    "amount_yocto": "2510298880985477000000000",
+    "tx": "5cr6r5ohrVPTZ7LHXh1GxhWmfaHcomX96z9LbDwaCLLD"
+  }
+]

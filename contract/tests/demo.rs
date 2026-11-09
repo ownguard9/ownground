@@ -5,19 +5,28 @@
 //
 // The wasm must exist first: run `cargo build --target
 // wasm32-unknown-unknown --release` in contract/ (or `cargo near
-// build` from a TTY). Run with: cargo test --test demo
+// build` from a TTY). Run with: cargo test --test demo -- --ignored
 //
 // The sandbox binary is downloaded by near-workspaces at build time.
 // Its Rust downloader ignores the proxy, so if that download fails,
 // fetch the tarball with curl instead and point the build at it:
 //   NEAR_SANDBOX_BIN_PATH=~/.near/near-sandbox-2.14.0/near-sandbox cargo test --test demo
 // The node itself needs the file-descriptor limit raised to 65535;
-// it cannot start in a container capped at 4096.
+// it cannot start in a container capped at 4096, which is why this
+// test is #[ignore]d: it cannot run in this VM at all.
 //
-// The demo timelock is 2 minutes; the test uses a 1-nanosecond timelock
-// so the amendment is executable on the next block. The deadline path
-// itself (execute before the deadline is rejected) is covered by the
-// unit tests; this test covers the full flow end to end.
+// v3 (distribution-timing guard): the demo mirrors the live v3 run
+// (community lagos-energy-cooperative-4, dave's attested entry pays
+// him 0.507 NEAR against 0.351 for the others). The dispute window
+// and the amendment timelock are both the 60-second minimum, so the
+// test waits the window out with a sandbox fast-forward (70 blocks)
+// plus a 65-second wall-clock sleep before the bond release and the
+// distribution — either clock model alone would do; both together
+// cover a sandbox whose block timestamps track wall time and one
+// that only advances on fast-forward. The sleep is std::thread::sleep
+// (blocking): the tokio dev-dependency has no "time" feature, and
+// the sandbox node is a separate process, so blocking the test
+// thread harms nothing.
 use near_workspaces::types::{Gas, NearToken};
 use serde_json::json;
 
@@ -25,7 +34,7 @@ const WASM: &[u8] = include_bytes!(
     "../target/wasm32-unknown-unknown/release/ownground.wasm"
 );
 const N: u128 = 1_000_000_000_000_000_000_000_000;
-const COMMUNITY: &str = "lagos-energy-cooperative";
+const COMMUNITY: &str = "lagos-energy-cooperative-4";
 const ASSET: &str = "generator";
 const GAS: Gas = Gas::from_tgas(100);
 const STORAGE: NearToken = NearToken::from_yoctonear(10_000_000_000_000_000_000_000);
@@ -34,6 +43,11 @@ fn y(n: u128) -> String {
     n.to_string()
 }
 
+// Needs a near-workspaces sandbox with the fd limit raised to 65535;
+// cannot run in this VM (capped at 4096). Run explicitly:
+//   NEAR_SANDBOX_BIN_PATH=~/.near/near-sandbox-2.14.0/near-sandbox \
+//     cargo test --test demo -- --ignored
+#[ignore]
 #[tokio::test]
 async fn lagos_energy_cooperative_demo() -> anyhow::Result<()> {
     let worker = near_workspaces::sandbox().await?;
@@ -68,8 +82,8 @@ async fn lagos_energy_cooperative_demo() -> anyhow::Result<()> {
                 "allowed_categories": ["maintenance", "operations"],
             },
             "activity_policy": { "capital_per_near": 1, "work_per_revenue_record": 1, "work_per_revenue_near": 1 },
-            "dispute_window_ns": 300_000_000_000u64,
-            "timelock_ns": 1u64,
+            "dispute_window_ns": 60_000_000_000u64,
+            "timelock_ns": 60_000_000_000u64,
         }))
         .deposit(NearToken::from_yoctonear(N / 10))
         .gas(GAS)
@@ -118,7 +132,16 @@ async fn lagos_energy_cooperative_demo() -> anyhow::Result<()> {
     // 4. DAO acquires the generator; the seller receives exactly 10 NEAR.
     let seller_before = seller.view_account().await?.balance;
     dao.call(cid, "acquire_asset")
-        .args_json(json!({ "campaign_id": ASSET, "seller": seller.id() }))
+        .args_json(json!({
+            "campaign_id": ASSET,
+            "seller": seller.id(),
+            "allocation": [
+                [alice.id().to_string(), 2500],
+                [bob.id().to_string(), 2500],
+                [carol.id().to_string(), 2500],
+                [dave.id().to_string(), 2500],
+            ],
+        }))
         .deposit(STORAGE)
         .gas(GAS)
         .transact()
@@ -138,7 +161,8 @@ async fn lagos_energy_cooperative_demo() -> anyhow::Result<()> {
     assert_eq!(asset["value"], y(10 * N));
     assert_eq!(asset["seller"], seller.id().to_string());
 
-    // 5. Alice records 3 NEAR onchain revenue: 4 work points.
+    // 5. Alice records 3 NEAR onchain revenue: 0 work points — a
+    // deposit proves money moved, not that the asset earned it.
     alice
         .call(cid, "record_revenue")
         .args_json(json!({
@@ -156,7 +180,7 @@ async fn lagos_energy_cooperative_demo() -> anyhow::Result<()> {
         .await?
         .json()?;
     assert_eq!(revenue[0]["status"], "Onchain");
-    assert_eq!(revenue[0]["points_awarded"], 4);
+    assert_eq!(revenue[0]["points_awarded"], 0);
 
     // 6. Bob records 1 NEAR reported revenue: no points (proof 3).
     bob.call(cid, "record_revenue")
@@ -316,7 +340,69 @@ async fn lagos_energy_cooperative_demo() -> anyhow::Result<()> {
     assert_eq!(treasury["total_revenue"], y(31 * N / 10));
     assert_eq!(treasury["total_bonds_held"], "0");
 
-    // 13. Execute the amendment after the timelock (proof 8).
+    // 13. Dave records 1 NEAR reported revenue; carol attests it with
+    // a 0.1 NEAR bond (the visible reward). Nobody disputes it.
+    dave.call(cid, "record_revenue")
+        .args_json(json!({
+            "asset_id": ASSET, "amount": y(N),
+            "source": "Generator rental", "reference": "invoice-003",
+        }))
+        .deposit(STORAGE)
+        .gas(GAS)
+        .transact()
+        .await?
+        .into_result()?;
+    carol
+        .call(cid, "attest_revenue")
+        .args_json(json!({ "asset_id": ASSET, "entry_id": 2 }))
+        .deposit(NearToken::from_yoctonear(N / 10 + N / 100))
+        .gas(GAS)
+        .transact()
+        .await?
+        .into_result()?;
+    let revenue: serde_json::Value = worker
+        .view(cid, "get_revenue")
+        .args_json(json!({ "asset_id": ASSET }))
+        .await?
+        .json()?;
+    assert_eq!(revenue[2]["status"], "Verified");
+    assert_eq!(revenue[2]["points_awarded"], 2);
+    assert_eq!(revenue[2]["recorded_by"], dave.id().to_string());
+    assert_eq!(revenue[2]["attestor"], carol.id().to_string());
+    let treasury: serde_json::Value = worker
+        .view(cid, "get_treasury")
+        .args_json(json!({ "community_id": COMMUNITY }))
+        .await?
+        .json()?;
+    assert_eq!(treasury["total_bonds_held"], y(N / 10));
+
+    // 14. Wait out the 60-second dispute window (and the 60-second
+    // amendment timelock, which started earlier at step 10), then
+    // carol's bond is released in full and the amendment executes
+    // (proofs 8 and 9). The v3 distribution-timing guard would block
+    // any payout before this wait.
+    worker.fast_forward(70).await?;
+    std::thread::sleep(std::time::Duration::from_secs(65));
+    carol
+        .call(cid, "release_attestation_bond")
+        .args_json(json!({ "asset_id": ASSET, "entry_id": 2 }))
+        .deposit(STORAGE)
+        .gas(GAS)
+        .transact()
+        .await?
+        .into_result()?;
+    let revenue: serde_json::Value = worker
+        .view(cid, "get_revenue")
+        .args_json(json!({ "asset_id": ASSET }))
+        .await?
+        .json()?;
+    assert_eq!(revenue[2]["bond_status"], "Released");
+    let treasury: serde_json::Value = worker
+        .view(cid, "get_treasury")
+        .args_json(json!({ "community_id": COMMUNITY }))
+        .await?
+        .json()?;
+    assert_eq!(treasury["total_bonds_held"], "0");
     dao.call(cid, "execute_policy_change")
         .args_json(json!({ "community_id": COMMUNITY, "amendment_id": 0 }))
         .deposit(STORAGE)
@@ -332,7 +418,9 @@ async fn lagos_energy_cooperative_demo() -> anyhow::Result<()> {
     assert_eq!(policies["spending"]["max_single_expense"], y(2 * N));
     assert_eq!(policies["amendments"][0]["status"], "Executed");
 
-    // 14. Execute the distribution (proofs 5 and 6).
+    // 15. Execute the distribution (proofs 5 and 6): dave takes the
+    // whole 0.156 NEAR activity pool on top of his 0.351 NEAR
+    // ownership share — 0.507 NEAR against 0.351 for the others.
     alice
         .call(cid, "execute_distribution")
         .args_json(json!({ "asset_id": ASSET }))
@@ -362,10 +450,10 @@ async fn lagos_energy_cooperative_demo() -> anyhow::Result<()> {
             .map(|p| p[1].as_str().unwrap().parse().unwrap())
             .unwrap_or(0)
     };
-    assert_eq!(payout(alice.id().as_str()), 507 * N / 1000, "alice 0.507");
+    assert_eq!(payout(alice.id().as_str()), 351 * N / 1000, "alice 0.351");
     assert_eq!(payout(bob.id().as_str()), 351 * N / 1000, "bob 0.351");
     assert_eq!(payout(carol.id().as_str()), 351 * N / 1000, "carol 0.351");
-    assert_eq!(payout(dave.id().as_str()), 351 * N / 1000, "dave 0.351");
+    assert_eq!(payout(dave.id().as_str()), 507 * N / 1000, "dave 0.507");
     let member_total: u128 = d["member_total"].as_str().unwrap().parse().unwrap();
     let retention: u128 = d["retention"].as_str().unwrap().parse().unwrap();
     let maintenance: u128 = d["maintenance"].as_str().unwrap().parse().unwrap();
@@ -373,14 +461,16 @@ async fn lagos_energy_cooperative_demo() -> anyhow::Result<()> {
     assert_eq!(member_total + retention + maintenance, distributed, "exact sum");
     assert!(d["unpaid"].as_array().unwrap().is_empty());
 
-    // 15. Final state: treasury 0, epoch advanced, points reset.
+    // 16. Final state: treasury 1.04 NEAR (retention + maintenance
+    // remain as reserves), epoch advanced, points reset.
     let treasury: serde_json::Value = worker
         .view(cid, "get_treasury")
         .args_json(json!({ "community_id": COMMUNITY }))
         .await?
         .json()?;
-    assert_eq!(treasury["treasury"], "0", "final treasury 0.0 NEAR");
+    assert_eq!(treasury["treasury"], y(104 * N / 100), "final treasury 1.04 NEAR");
     assert_eq!(treasury["distributable"], "0");
+    assert_eq!(treasury["total_bonds_held"], "0");
     let activity: serde_json::Value = worker
         .view(cid, "get_activity")
         .args_json(json!({ "asset_id": ASSET }))

@@ -1,0 +1,187 @@
+[
+  {
+    "label": "create_community",
+    "signer": "alice.ownground3.testnet",
+    "tx": "3RBmcD2iztXQqJiYVJRxnwir4cUTFqFPwUjeUGd5Z53s"
+  },
+  {
+    "label": "create_campaign",
+    "signer": "alice.ownground3.testnet",
+    "tx": "E5DRSfwZbWZLYX7Uo3HxBwpEDoRyvvLPf2CxVSUVnt4n"
+  },
+  {
+    "label": "contribute",
+    "signer": "alice.ownground3.testnet",
+    "tx": "FywhRoZwihudzuQnULmXuUQ6h3rJvPqYPJBKN2ZjWteZ"
+  },
+  {
+    "label": "contribute",
+    "signer": "bob.ownground3.testnet",
+    "tx": "2pCrpgxMcSkpWjNTGLfwmmgQqHs1LHHpxz1EzDya21VJ"
+  },
+  {
+    "label": "contribute",
+    "signer": "carol.ownground3.testnet",
+    "tx": "Aa8NRwb5viABKjnnsbz3eahQJC1tGgiDgfKfiQegW3p5"
+  },
+  {
+    "label": "contribute",
+    "signer": "dave.ownground3.testnet",
+    "tx": "6iwg9gusbWTvnkgBJqqzaCrE45RnfNfLRpuHaa6v8kZo"
+  },
+  {
+    "label": "add_proposal",
+    "signer": "lagos-energy3.testnet",
+    "tx": "BEU8BB2GyzVAtGBmy2A7HQtW5i29UV7ViK9fKPeBjYqE",
+    "description": "Acquire the generator for 10 NEAR"
+  },
+  {
+    "label": "dao:acquire_asset",
+    "signer": "alice.ownground3.testnet",
+    "tx": "E39Va8pjWhdu5hXPtmv6txPY5GdSGtZMVtZ7526ejTGE",
+    "description": "Acquire the generator for 10 NEAR",
+    "deciding": false,
+    "expect": "success"
+  },
+  {
+    "label": "dao:acquire_asset",
+    "signer": "bob.ownground3.testnet",
+    "tx": "Fu6VLKHygum5ZPrxtSRATUDzBE8Bt3DfAogGheWcoDhC",
+    "description": "Acquire the generator for 10 NEAR",
+    "deciding": true,
+    "expect": "success"
+  },
+  {
+    "label": "record_revenue",
+    "signer": "alice.ownground3.testnet",
+    "tx": "EK4exiJdNyfwmFR3rJLRF8WHZvTHZBskBYJCDrachYob"
+  },
+  {
+    "label": "record_revenue",
+    "signer": "bob.ownground3.testnet",
+    "tx": "9K7tpehyTHYn79XHMFs3SMHZiwV4ZyBodJm41eRrDLEN"
+  },
+  {
+    "label": "attest_revenue",
+    "signer": "alice.ownground3.testnet",
+    "tx": "3Nao84gSmEtz2HCFz3nVn5WxKrG12V9DiUzMcXztQEx5"
+  },
+  {
+    "label": "add_proposal",
+    "signer": "lagos-energy3.testnet",
+    "tx": "9AevANBmpt9yKXMYmUf3m76SdhoioaM1XLZbDMqhafpQ",
+    "description": "Pay 2 NEAR for operations"
+  },
+  {
+    "label": "dao:pay_expense",
+    "signer": "alice.ownground3.testnet",
+    "tx": "HLYmTentaw4BhFVwKUtJGB6tkMPGriPp1tn845mzDmWD",
+    "description": "Pay 2 NEAR for operations",
+    "deciding": false,
+    "expect": "success"
+  },
+  {
+    "label": "dao:pay_expense",
+    "signer": "bob.ownground3.testnet",
+    "tx": "khL9qQocoXQhAi8DFVVqaPcAkgSUzAjXutMkpk5uimK",
+    "description": "Pay 2 NEAR for operations",
+    "deciding": true,
+    "expect": "fail:expense exceeds max_single_expense"
+  },
+  {
+    "label": "add_proposal",
+    "signer": "lagos-energy3.testnet",
+    "tx": "BHvutuuDcZTEd6CzLE3aARZk3scJKuBmyNQMts2etYtG",
+    "description": "Pay 0.5 NEAR for operations"
+  },
+  {
+    "label": "dao:pay_expense",
+    "signer": "alice.ownground3.testnet",
+    "tx": "8tuXVHvWWmPGQUuxQuYGxxjhCVyB7NczFLCzMWFz6fUa",
+    "description": "Pay 0.5 NEAR for operations",
+    "deciding": false,
+    "expect": "success"
+  },
+  {
+    "label": "dao:pay_expense",
+    "signer": "bob.ownground3.testnet",
+    "tx": "AZCiKBKGP1xVNsdwjfgTbqV9bmHS8zQPgxUehGtxoFHH",
+    "description": "Pay 0.5 NEAR for operations",
+    "deciding": true,
+    "expect": "success"
+  },
+  {
+    "label": "add_proposal",
+    "signer": "lagos-energy3.testnet",
+    "tx": "HnGDHkESzsFkZWLo2z317ZKBo9avRGs4gdzSaztcj5MN",
+    "description": "Propose spending cap 1 to 2 NEAR"
+  },
+  {
+    "label": "dao:propose_policy_change",
+    "signer": "alice.ownground3.testnet",
+    "tx": "7oWTv8U8pbF488aPjjRDjtfWaPWtPyeG8iUnjWak1kSS",
+    "description": "Propose spending cap 1 to 2 NEAR",
+    "deciding": false,
+    "expect": "success"
+  },
+  {
+    "label": "dao:propose_policy_change",
+    "signer": "bob.ownground3.testnet",
+    "tx": "EoGJPDMChoZv5mhZZEwEjDjLm2uKGcDVvjrKuPfyZ4XH",
+    "description": "Propose spending cap 1 to 2 NEAR",
+    "deciding": true,
+    "expect": "success"
+  },
+  {
+    "label": "dispute_revenue",
+    "signer": "carol.ownground3.testnet",
+    "tx": "Eqvr1dA99rUFn2hzFHgTyrHFXMkL6zCWQPBNgCxbs8hZ"
+  },
+  {
+    "label": "add_proposal",
+    "signer": "lagos-energy3.testnet",
+    "tx": "Bc63JLBKz1mr7WsEsG6u3VQbqZJaHE1pALuX9JQZBLG8",
+    "description": "Uphold the dispute on entry 1"
+  },
+  {
+    "label": "dao:resolve_dispute",
+    "signer": "alice.ownground3.testnet",
+    "tx": "8jXrSiC7pzy1n9FWhdF8bnGGNFCvoryQtoiUNJbPGGv2",
+    "description": "Uphold the dispute on entry 1",
+    "deciding": false,
+    "expect": "success"
+  },
+  {
+    "label": "dao:resolve_dispute",
+    "signer": "bob.ownground3.testnet",
+    "tx": "9NEL4WTucq8G6D9DcZj285dniQCRSRTDAb6CbUoK14TG",
+    "description": "Uphold the dispute on entry 1",
+    "deciding": true,
+    "expect": "success"
+  },
+  {
+    "label": "record_revenue",
+    "signer": "dave.ownground3.testnet",
+    "tx": "HPwKGGTb79UDhascrQC9tFaVyGU9oqkBtoCTSftbvrK1"
+  },
+  {
+    "label": "attest_revenue",
+    "signer": "carol.ownground3.testnet",
+    "tx": "zCWtzqCxUvDrX5qCdAyucM2sy16VE1bYyEoQ7S4v4V5"
+  },
+  {
+    "label": "execute_policy_change",
+    "signer": "alice.ownground3.testnet",
+    "tx": "6aZnGJJhaVvuABLhooo2hmp6WiGzHJhEufd63Jx1oL2w"
+  },
+  {
+    "label": "release_attestation_bond",
+    "signer": "carol.ownground3.testnet",
+    "tx": "A6H52r9subv2CZ1CvhPCzNPrKAUBmY3Pedmm4DijhRqQ"
+  },
+  {
+    "label": "execute_distribution",
+    "signer": "alice.ownground3.testnet",
+    "tx": "4HjuJEhRRXBA6PEjoAsV6BxvFyvATNdjqwK4GSphqpjQ"
+  }
+]

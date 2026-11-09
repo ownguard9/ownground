@@ -38,4 +38,9 @@ debug = false
 # the site's failure classifier reads panic text too. Unwind keeps the
 # message. (Found live 2026-11-09: create_community trapped with a bare
 # unreachable for every input, including deliberately invalid ones.)
+# The setting is explicit here, not left to the default: a plain
+# `cargo build` without it produced a wasm whose every panic trapped
+# bare (found live again 2026-11-09 on the v3 deploy — the step-8
+# over-cap expense trapped instead of naming the rule).
+panic = "unwind"
 overflow-checks = true

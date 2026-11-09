@@ -1428,16 +1428,39 @@ impl Contract {
     /// exactly 0.01 NEAR storage. The activity slice is split by the
     /// asset's current-epoch work points only; after the distribution the
     /// epoch increments and the current points reset to 0, so points
-    /// reward recent activity. Pays every owner in the same call (real
-    /// NEAR transfers, one promise per payout, each with a callback that
-    /// reconciles a failed transfer). A second call with no new revenue
-    /// computes D = 0 and is rejected — that rejection IS the one-shot
-    /// guard.
+    /// reward recent activity. Timing guard: the distribution is
+    /// blocked while any revenue entry on the asset is Disputed, or
+    /// Verified but still inside its dispute window — otherwise a
+    /// payout would consume the entry's work points and the epoch
+    /// reset would make an uphold unable to claw them back. Pending
+    /// entries do not block (they hold no points yet). Pays every owner
+    /// in the same call (real NEAR transfers, one promise per payout,
+    /// each with a callback that reconciles a failed transfer). A second
+    /// call with no new revenue computes D = 0 and is rejected — that
+    /// rejection IS the one-shot guard.
     #[payable]
     pub fn execute_distribution(&mut self, asset_id: String) -> DistributionRecordView {
         self.require_attached(STORAGE_RECORD);
         let mut asset = self.asset(&asset_id);
         let mut community = self.community(&asset.community_id);
+        // Distribution timing guard (see the doc comment above): no
+        // payout while a challenge is still open. Checked before any
+        // split is computed and before any state changes.
+        let now = env::block_timestamp();
+        let blocked = asset.revenue.iter().any(|entry| match entry.status {
+            RevenueStatus::Disputed => true,
+            RevenueStatus::Verified => {
+                let verified_at = entry
+                    .verified_at
+                    .expect("verified entry has no attestation time");
+                now <= verified_at + community.dispute_window_ns
+            }
+            _ => false,
+        });
+        assert!(
+            !blocked,
+            "distribution blocked: an entry is disputed or still inside its dispute window"
+        );
         let policy = community.policy.clone();
         let d_asset = distributable(&asset);
         let campaigns = self.community_campaigns(&community);
@@ -3196,7 +3219,11 @@ mod tests {
         // 0.5 NEAR DAO-approved expense, inside the 1 NEAR cap.
         testing_env!(ctx(DAO, STORAGE_RECORD, T0).build());
         c.pay_expense(asset_id.clone(), U128(NEAR / 2), acc("bob.testnet"), "fuel".to_string(), "operations".to_string());
-        testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0).build());
+        // The distribution guard blocks while bob's attested entry is
+        // still inside its 7-day dispute window, so distribute after
+        // the window passes (the live demo waits out its 5-minute
+        // window instead).
+        testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0 + 8 * 24 * 60 * 60 * 1_000_000_000).build());
         let view = c.execute_distribution(asset_id.clone());
         assert_eq!(view.distributed.0, 25 * NEAR / 10);
         // Bob holds the only work points (2), so he takes the whole
@@ -3336,7 +3363,9 @@ mod tests {
         c.record_revenue(asset_id.clone(), U128(NEAR), "cash".to_string(), "rep-1".to_string());
         testing_env!(ctx("alice.testnet", ATTESTATION_BOND + STORAGE_RECORD, T0).build());
         c.attest_revenue(asset_id.clone(), 2);
-        testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0).build());
+        // The distribution guard blocks while bob's fresh attestation
+        // is inside its 7-day dispute window, so distribute after it.
+        testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0 + 8 * 24 * 60 * 60 * 1_000_000_000).build());
         let view2 = c.execute_distribution(asset_id);
         let act2 = |a: &str| view2.activity_payouts.iter().find(|(x, _)| x.as_str() == a).map(|(_, p)| p.0).unwrap_or(0);
         assert_eq!(act2("alice.testnet"), 0, "past-epoch points do not carry over");
@@ -3586,6 +3615,74 @@ mod tests {
         assert_eq!(v.policy.treasury_bp, 2500);
         assert_eq!(v.policy.maintenance_bp, 1500);
         assert_eq!(v.policy.activity_bp, 1000);
+    }
+
+    // -- Distribution timing guard -------------------------------------------
+    //
+    // Anyone may call execute_distribution, so the contract itself must
+    // refuse a payout while a challenge is still open: paying out
+    // would consume the entry's work points and the epoch reset would
+    // make an uphold unable to claw them back. The guard blocks while
+    // any entry is Disputed, or Verified but still inside its dispute
+    // window. Pending entries never block (they hold no points yet).
+
+    #[test]
+    #[should_panic(expected = "distribution blocked")]
+    fn distribution_blocked_while_entry_disputed() {
+        let (mut c, asset_id) = setup_attested();
+        testing_env!(ctx("carol.testnet", STORAGE_RECORD, T0 + 24 * 60 * 60 * 1_000_000_000).build());
+        c.dispute_revenue(asset_id.clone(), 0);
+        // 3 NEAR onchain revenue would fund a distribution — but the
+        // open dispute blocks it.
+        testing_env!(ctx("alice.testnet", 3 * NEAR + STORAGE_RECORD, T0 + 24 * 60 * 60 * 1_000_000_000).build());
+        c.record_revenue(asset_id.clone(), U128(3 * NEAR), "rental".to_string(), "inv-1".to_string());
+        testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0 + 24 * 60 * 60 * 1_000_000_000).build());
+        c.execute_distribution(asset_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "distribution blocked")]
+    fn distribution_blocked_while_verified_entry_in_window() {
+        let (mut c, asset_id) = setup_attested();
+        // Bob's entry was attested at T0; the 7-day window is open.
+        testing_env!(ctx("alice.testnet", 3 * NEAR + STORAGE_RECORD, T0).build());
+        c.record_revenue(asset_id.clone(), U128(3 * NEAR), "rental".to_string(), "inv-1".to_string());
+        testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0).build());
+        c.execute_distribution(asset_id);
+    }
+
+    #[test]
+    fn distribution_allowed_after_window_passes() {
+        let (mut c, asset_id) = setup_attested();
+        testing_env!(ctx("alice.testnet", 3 * NEAR + STORAGE_RECORD, T0).build());
+        c.record_revenue(asset_id.clone(), U128(3 * NEAR), "rental".to_string(), "inv-1".to_string());
+        // Past the 7-day window, the verified entry no longer blocks:
+        // D = 3 NEAR, and bob — the only points holder (2) — takes the
+        // whole 0.18 NEAR activity pool on top of 0.405 ownership.
+        testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0 + 8 * 24 * 60 * 60 * 1_000_000_000).build());
+        let view = c.execute_distribution(asset_id.clone());
+        assert_eq!(view.distributed.0, 3 * NEAR);
+        assert_eq!(view.member_total.0, 18 * NEAR / 10);
+        assert_eq!(view.activity_pool.0, 18 * NEAR / 100);
+        let payout_of = |a: &str| view.payouts.iter().find(|(x, _)| x.as_str() == a).unwrap().1 .0;
+        assert_eq!(payout_of("bob.testnet"), 585_000_000_000_000_000_000_000u128);
+        assert_eq!(payout_of("alice.testnet"), 405_000_000_000_000_000_000_000u128);
+    }
+
+    #[test]
+    fn distribution_allowed_with_only_pending_entries() {
+        let (mut c, campaign_id) = setup_funded();
+        let asset_id = acquire(&mut c, &campaign_id);
+        // A reported entry that nobody attested holds no points and
+        // never blocks a distribution.
+        testing_env!(ctx("bob.testnet", STORAGE_RECORD, T0).build());
+        c.record_revenue(asset_id.clone(), U128(NEAR), "cash".to_string(), "rep-1".to_string());
+        testing_env!(ctx("alice.testnet", 3 * NEAR + STORAGE_RECORD, T0).build());
+        c.record_revenue(asset_id.clone(), U128(3 * NEAR), "rental".to_string(), "inv-1".to_string());
+        testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0).build());
+        let view = c.execute_distribution(asset_id);
+        assert_eq!(view.distributed.0, 3 * NEAR);
+        assert_eq!(view.activity_pool.0, 0, "pending entries earn no activity");
     }
 
     // -- Disputes and bonds --------------------------------------------------
@@ -4367,99 +4464,94 @@ mod tests {
 
     // -- Epoch-safe disputes -----------------------------------------------
     //
-    // Full sequence: dispute -> distribution -> new activity ->
-    // resolution, both upheld and rejected. A resolution after the
-    // distribution must never touch current-epoch points: no docking
-    // of new-epoch points on uphold, no double-pay on reject.
-
-    /// Dispute bob's attested entry, then distribute (3 NEAR onchain)
-    /// and give bob 2 fresh work points in the new epoch. Returns the
-    /// contract and asset id with the dispute still open.
+    // Full sequence, post-guard: distribute, then new activity in the
+    // new epoch, then a dispute of the NEW entry. The old shape —
+    // dispute, then distribute, then resolve — is impossible since the
+    // distribution guard: a distribution is blocked while any entry is
+    // Disputed, so a dispute can never straddle a distribution. The
+    // guard forces the wait first: entry 0's 7-day window must pass
+    // before the distribution runs. Returns the contract and asset id
+    // with entry 2 (epoch 1) Disputed and bob's 2 fresh points
+    // suspended.
     fn setup_dispute_then_distribution() -> (Contract, String) {
         let (mut c, asset_id) = setup_attested();
-        testing_env!(ctx("carol.testnet", STORAGE_RECORD, T0 + 24 * 60 * 60 * 1_000_000_000).build());
-        c.dispute_revenue(asset_id.clone(), 0);
-        // 3 NEAR onchain revenue (0 points) funds a distribution.
-        testing_env!(ctx("alice.testnet", 3 * NEAR + STORAGE_RECORD, T0 + 24 * 60 * 60 * 1_000_000_000).build());
+        // 3 NEAR onchain revenue (0 points) funds a distribution, run
+        // after entry 0's dispute window has passed (T0 + 8 days).
+        // Entry 0 stays Verified and is never disputed.
+        testing_env!(ctx("alice.testnet", 3 * NEAR + STORAGE_RECORD, T0 + 8 * 24 * 60 * 60 * 1_000_000_000).build());
         c.record_revenue(asset_id.clone(), U128(3 * NEAR), "rental".to_string(), "inv-1".to_string());
-        testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0 + 24 * 60 * 60 * 1_000_000_000).build());
+        testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0 + 8 * 24 * 60 * 60 * 1_000_000_000).build());
         let view = c.execute_distribution(asset_id.clone());
         assert_eq!(view.distributed.0, 3 * NEAR);
         assert_eq!(c.get_asset(asset_id.clone()).epoch, 1);
         // New verified activity in epoch 1: bob records 1 NEAR
         // reported revenue, alice attests it — bob earns 2 fresh points.
-        testing_env!(ctx("bob.testnet", STORAGE_RECORD, T0 + 2 * 24 * 60 * 60 * 1_000_000_000).build());
+        testing_env!(ctx("bob.testnet", STORAGE_RECORD, T0 + 8 * 24 * 60 * 60 * 1_000_000_000).build());
         c.record_revenue(asset_id.clone(), U128(NEAR), "cash".to_string(), "rep-2".to_string());
-        testing_env!(ctx("alice.testnet", ATTESTATION_BOND + STORAGE_RECORD, T0 + 2 * 24 * 60 * 60 * 1_000_000_000).build());
+        testing_env!(ctx("alice.testnet", ATTESTATION_BOND + STORAGE_RECORD, T0 + 8 * 24 * 60 * 60 * 1_000_000_000).build());
         c.attest_revenue(asset_id.clone(), 2);
         let activity = c.get_activity(asset_id.clone());
         let work = activity.work_points.iter().find(|(x, _)| x.as_str() == "bob.testnet").map(|(_, p)| p.current).unwrap_or(0);
-        assert_eq!(work, 2, "bob holds 2 fresh epoch-1 points before resolution");
+        assert_eq!(work, 2, "bob holds 2 fresh epoch-1 points before the dispute");
+        // Carol disputes the epoch-1 entry (its window is open): the
+        // 2 fresh points are suspended.
+        testing_env!(ctx("carol.testnet", STORAGE_RECORD, T0 + 8 * 24 * 60 * 60 * 1_000_000_000).build());
+        c.dispute_revenue(asset_id.clone(), 2);
         (c, asset_id)
     }
 
     #[test]
-    fn dispute_after_distribution_uphold_keeps_new_epoch_points() {
+    fn dispute_after_distribution_uphold_removes_new_epoch_points() {
         let (mut c, asset_id) = setup_dispute_then_distribution();
-        // The DAO upholds the old dispute: entry 0 is rejected and the
-        // bond forfeits — but bob's new-epoch points are untouched.
-        testing_env!(ctx(DAO, STORAGE_RECORD, T0 + 3 * 24 * 60 * 60 * 1_000_000_000).build());
-        c.resolve_dispute(asset_id.clone(), 0, true);
+        // The DAO upholds the epoch-1 dispute: entry 2 is rejected and
+        // the bond forfeits, and bob's fresh points stay removed.
+        // Entry 0 (epoch 0, past its window) is untouched.
+        testing_env!(ctx(DAO, STORAGE_RECORD, T0 + 9 * 24 * 60 * 60 * 1_000_000_000).build());
+        c.resolve_dispute(asset_id.clone(), 2, true);
         let entries = c.get_revenue(asset_id.clone());
-        assert_eq!(entries[0].status, "Rejected");
-        assert_eq!(entries[0].bond_status, Some(BondStatus::Forfeited));
-        assert_eq!(entries[2].status, "Verified", "the new entry stands");
+        assert_eq!(entries[0].status, "Verified", "the old entry stands");
+        assert_eq!(entries[2].status, "Rejected");
+        assert_eq!(entries[2].bond_status, Some(BondStatus::Forfeited));
         let activity = c.get_activity(asset_id.clone());
         let work = activity.work_points.iter().find(|(x, _)| x.as_str() == "bob.testnet").map(|(_, p)| p.current).unwrap_or(0);
-        assert_eq!(work, 2, "upholding an old dispute must not dock new-epoch points");
+        assert_eq!(work, 0, "upholding the dispute keeps the fresh points removed");
         let t = c.get_treasury("lagos-energy".to_string());
         assert_eq!(t.total_revenue.0, 3 * NEAR + ATTESTATION_BOND, "onchain 3 + forfeited bond 0.1");
     }
 
     #[test]
-    fn dispute_after_distribution_reject_does_not_double_pay() {
+    fn dispute_after_distribution_reject_restores_new_epoch_points() {
         let (mut c, asset_id) = setup_dispute_then_distribution();
-        // The DAO rejects the old dispute: entry 0 is verified again
-        // and the bond is released — but bob's points are NOT restored
-        // on top of his new-epoch points (that would double-pay: 4).
-        testing_env!(ctx(DAO, STORAGE_RECORD, T0 + 3 * 24 * 60 * 60 * 1_000_000_000).build());
-        c.resolve_dispute(asset_id.clone(), 0, false);
+        // The DAO rejects the epoch-1 dispute: entry 2 is verified
+        // again and the bond is released — bob's 2 fresh points are
+        // restored, exactly, not doubled on top of anything.
+        testing_env!(ctx(DAO, STORAGE_RECORD, T0 + 9 * 24 * 60 * 60 * 1_000_000_000).build());
+        c.resolve_dispute(asset_id.clone(), 2, false);
         let entries = c.get_revenue(asset_id.clone());
-        assert_eq!(entries[0].status, "Verified");
-        assert_eq!(entries[0].bond_status, Some(BondStatus::Released));
+        assert_eq!(entries[0].status, "Verified", "the old entry stands");
+        assert_eq!(entries[2].status, "Verified");
+        assert_eq!(entries[2].bond_status, Some(BondStatus::Released));
         let activity = c.get_activity(asset_id.clone());
         let work = activity.work_points.iter().find(|(x, _)| x.as_str() == "bob.testnet").map(|(_, p)| p.current).unwrap_or(0);
-        assert_eq!(work, 2, "rejecting an old dispute must not restore points into a new epoch");
+        assert_eq!(work, 2, "rejecting the dispute restores exactly the suspended points");
     }
 
     #[test]
-    fn dispute_of_old_entry_in_new_epoch_does_not_suspend_new_points() {
+    #[should_panic(expected = "dispute window has passed")]
+    fn dispute_of_old_entry_after_distribution_rejected() {
+        // The old shape — distribute, then dispute an entry from the
+        // closed epoch — is closed by the distribution guard: a
+        // distribution only runs once every verified entry is past its
+        // window, and a past-window entry cannot be disputed at all.
         // Bob's entry is attested in epoch 0; a distribution closes
-        // the epoch; bob earns 2 fresh points in epoch 1. Disputing
-        // the OLD entry now must not suspend the new points.
+        // the epoch; disputing the OLD entry now fails on the window.
         let (mut c, asset_id) = setup_attested();
         testing_env!(ctx("alice.testnet", 3 * NEAR + STORAGE_RECORD, T0).build());
         c.record_revenue(asset_id.clone(), U128(3 * NEAR), "rental".to_string(), "inv-1".to_string());
-        testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0).build());
+        testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0 + 8 * 24 * 60 * 60 * 1_000_000_000).build());
         c.execute_distribution(asset_id.clone());
         assert_eq!(c.get_asset(asset_id.clone()).epoch, 1);
-        testing_env!(ctx("bob.testnet", STORAGE_RECORD, T0 + 24 * 60 * 60 * 1_000_000_000).build());
-        c.record_revenue(asset_id.clone(), U128(NEAR), "cash".to_string(), "rep-2".to_string());
-        testing_env!(ctx("alice.testnet", ATTESTATION_BOND + STORAGE_RECORD, T0 + 24 * 60 * 60 * 1_000_000_000).build());
-        c.attest_revenue(asset_id.clone(), 2);
-        // Carol disputes the OLD entry 0 (still Verified, in window).
-        testing_env!(ctx("carol.testnet", STORAGE_RECORD, T0 + 2 * 24 * 60 * 60 * 1_000_000_000).build());
-        c.dispute_revenue(asset_id.clone(), 0);
-        let entries = c.get_revenue(asset_id.clone());
-        assert_eq!(entries[0].status, "Disputed");
-        let activity = c.get_activity(asset_id.clone());
-        let work = activity.work_points.iter().find(|(x, _)| x.as_str() == "bob.testnet").map(|(_, p)| p.current).unwrap_or(0);
-        assert_eq!(work, 2, "suspending an old-epoch entry must not dock new-epoch points");
-        // Upholding it forfeits the bond but still leaves the points.
-        testing_env!(ctx(DAO, STORAGE_RECORD, T0 + 3 * 24 * 60 * 60 * 1_000_000_000).build());
-        c.resolve_dispute(asset_id.clone(), 0, true);
-        let activity = c.get_activity(asset_id.clone());
-        let work = activity.work_points.iter().find(|(x, _)| x.as_str() == "bob.testnet").map(|(_, p)| p.current).unwrap_or(0);
-        assert_eq!(work, 2);
+        testing_env!(ctx("carol.testnet", STORAGE_RECORD, T0 + 8 * 24 * 60 * 60 * 1_000_000_000).build());
+        c.dispute_revenue(asset_id, 0);
     }
 }

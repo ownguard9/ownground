@@ -10,37 +10,39 @@ earns revenue from that asset, and distributes the earnings under an
 approved policy. One Rust contract, one static site, no backend, no
 mainnet parts.
 
-> Status: deployed to NEAR testnet and the live demo passed twice on the
-> v2 contract (2026-11-09): contract `ownground2.testnet`, DAO
-> `lagos-energy2.testnet`, all 17 demo steps green, `verify.mjs` 89/89
-> PASS (29 live state checks + 60 receipt checks). Not submitted yet.
+> Status: deployed to NEAR testnet and the live demo passed on the
+> v3 contract (2026-11-09): contract `ownground3.testnet`, DAO
+> `lagos-energy3.testnet`, all 19 demo steps green, `verify.mjs` 97/97
+> PASS (31 live state checks + 66 receipt checks). Not submitted yet.
 > The GitHub identity is ownguard9 and the repo is live at
 > github.com/ownguard9/ownground. Everything below runs on NEAR testnet only.
-> The v1 contract `ownground.testnet` is superseded: it stays deployed
-> as-is but is no longer the live deployment, because the remediation
-> changed the state layout and there is no migrate method.
+> The v2 contract `ownground2.testnet` is superseded: it stays deployed
+> as-is but is no longer the live deployment, because v3 adds the
+> distribution-timing guard and there is no migrate method. The v1
+> contract `ownground.testnet` is likewise superseded.
 
 ## Live deployment (NEAR testnet)
 
 Deployed 2026-11-09; the demo below ran live against these accounts
-twice, both runs passing all 17 steps with identical final numbers.
-The first v2 run used community `lagos-energy-cooperative-2`
-(campaign `-c1`, asset `-a1`); the second, fully receipt-verified run
-used community `lagos-energy-cooperative-3` (campaign `-c2`, asset
-`-a2`). An earlier partial attempt (`lagos-energy-cooperative`,
-acquired but never distributed) also sits on the contract; the site
-lists only the receipt-verified run.
+once, passing all 19 steps. The run used community
+`lagos-energy-cooperative-5` (campaign `-c1`, asset `-a1`). An
+earlier partial v3 attempt (`lagos-energy-cooperative-4`, acquired
+but stopped at step 8 when the deployed wasm trapped every panic as
+a bare `unreachable`) also sits on the contract; the site lists only
+the receipt-verified run. The v2 contract holds three communities
+(`lagos-energy-cooperative`, `-2`, `-3`); the site lists only the
+v3 run now.
 
 | What | Account / id |
 |---|---|
-| Contract | `ownground2.testnet` |
-| DAO (Sputnik v2, council = the four members, threshold 2) | `lagos-energy2.testnet` |
-| Community | `lagos-energy-cooperative-3` |
-| Campaign | `lagos-energy-cooperative-3-c2` |
-| Asset (generator) | `lagos-energy-cooperative-3-a2` |
-| Members | `alice.ownground2.testnet`, `bob.ownground2.testnet`, `carol.ownground2.testnet`, `dave.ownground2.testnet` |
-| Seller | `seller.ownground2.testnet` |
-| Operations recipient | `ops.ownground2.testnet` |
+| Contract | `ownground3.testnet` |
+| DAO (Sputnik v2, council = the four members, threshold 2) | `lagos-energy3.testnet` |
+| Community | `lagos-energy-cooperative-5` |
+| Campaign | `lagos-energy-cooperative-5-c1` |
+| Asset (generator) | `lagos-energy-cooperative-5-a1` |
+| Members | `alice.ownground3.testnet`, `bob.ownground3.testnet`, `carol.ownground3.testnet`, `dave.ownground3.testnet` |
+| Seller | `seller.ownground3.testnet` |
+| Operations recipient | `ops.ownground3.testnet` |
 
 ## How it works
 
@@ -81,9 +83,9 @@ lists only the receipt-verified run.
 
 ## The demo (Lagos Energy Cooperative)
 
-The full demo is `scripts/demo.mjs` (17 steps; run live on testnet
-2026-11-09, all steps passed twice on the v2 contract — logs
-`demo-log-v2.txt` and `demo-log-v2-attempt3.txt`). Four members
+The full demo is `scripts/demo.mjs` (19 steps; run live on testnet
+2026-11-09, all steps passed on the v3 contract — log
+`demo-log-v3.txt`). Four members
 contribute 2.5 NEAR each to a 10 NEAR
 generator target. The DAO acquires the generator from a demo seller.
 Alice records 3 NEAR onchain revenue. Bob records 1 NEAR reported revenue,
@@ -91,48 +93,55 @@ attested by Alice. A 2 NEAR expense is rejected onchain. A 0.5 NEAR
 expense succeeds. Carol disputes bob's entry and the DAO upholds it, so
 the entry is rejected, bob's 2 work points are removed, and the 0.1 NEAR
 bond enters the treasury as revenue. The DAO proposes raising the spending
-cap from 1 to 2 NEAR, waits the timelock, and executes it. Then the
+cap from 1 to 2 NEAR, waits the timelock, and executes it. Then dave
+records 1 NEAR reported revenue, attested by carol, and nobody disputes
+it — so dave holds the only work points at distribution. The demo waits
+out the dispute window, carol's bond is released in full, and then the
 distribution runs.
 
 Final numbers, verified in `check-maths-activity.mjs` and by the live
-verifier. Note the change from the v1 demo: Alice's 3 NEAR onchain
-deposit now earns no work points, and the dispute upheld removes bob's
-2 attested points, so no verified work stands at distribution — the
-activity pool is 0 and the whole 1.56 NEAR member pool splits by
-ownership, 0.39 NEAR each. D stays 2.6 NEAR (3.0 revenue + 0.1
+verifier. Note the change from the v2 demo: dave's attested, undisputed
+entry survives to distribution, so he takes the whole 0.156 NEAR
+activity pool on top of his 0.351 NEAR ownership share — 0.507 NEAR
+against 0.351 for the other three. Alice's 3 NEAR onchain deposit
+still earns no work points, and the dispute upheld still removes bob's
+2 attested points. D stays 2.6 NEAR (3.0 revenue + 0.1
 forfeited bond − 0.5 expense).
 
 | | NEAR |
 |---|---|
 | D (distributed) | 2.6 |
 | Member pool | 1.56 |
-| Activity pool | 0 (no verified work stands) |
-| Ownership pool | 1.56 |
-| Alice | 0.39 (ownership only) |
-| Bob | 0.39 (ownership only, points removed) |
-| Carol | 0.39 |
-| Dave | 0.39 |
+| Activity pool | 0.156 (all to dave) |
+| Ownership pool | 1.404 |
+| Alice | 0.351 (ownership only) |
+| Bob | 0.351 (ownership only, points removed) |
+| Carol | 0.351 |
+| Dave | 0.507 (0.351 ownership + 0.156 activity) |
 | Retained in the treasury | 0.65 |
 | Maintenance | 0.39 |
 | Final treasury | 1.04 (retention 0.65 + maintenance 0.39 remain as reserves) |
 
-The demo proves eight things: a valid expense succeeds; an excessive
+The demo proves nine things: a valid expense succeeds; an excessive
 expense fails onchain with the spending-policy reason; unverified revenue
 earns no points; verified activity earns points (bob holds 2 work
-points after attestation, before the dispute); with no verified work
-standing at distribution, the activity slice falls back to ownership
-and all four equal owners get 0.39 NEAR; total payouts equal D exactly;
-the dispute flow; the policy amendment flow. The transfer receipts
+points after attestation, before the dispute); the activity slice pays
+the worker — dave gets 0.507 NEAR against 0.351 for the others, his
+attested, undisputed entry earning the whole 0.156 NEAR activity pool;
+total payouts equal D exactly;
+the dispute flow; the policy amendment flow; and an undisputed
+attestation's bond is returned in full after the dispute window
+(carol's 0.1 NEAR). The transfer receipts
 prove the money moved: the seller's balance rises exactly 10 NEAR
 across the deciding acquire vote, the operations recipient exactly
-0.5 NEAR, and each member exactly 0.39 NEAR across the distribution
+0.5 NEAR, and each member exactly their payout across the distribution
 (the signing member's balance also shows that tx's gas and its 0.01
 NEAR storage deposit — see `verify.mjs --receipts`).
 
 ## Judge steps (do X, see Y)
 
 All of these are checkable against the deployed contract
-(`ownground2.testnet`, community `lagos-energy-cooperative-3`); they are
+(`ownground3.testnet`, community `lagos-energy-cooperative-5`); they are
 also covered by the unit tests and the maths scripts.
 
 | Do | See |
@@ -147,12 +156,13 @@ also covered by the unit tests and the maths scripts.
 | Pay a 0.5 NEAR operations expense | Recorded; treasury falls by 0.5 NEAR |
 | Dispute bob's entry as carol, DAO upholds | Entry Rejected; bob's points 0; total revenue 3.1 NEAR (bond included) |
 | Propose a spending cap change, wait the timelock, execute | Cap changes from 1 to 2 NEAR; the old cap stayed in force until execution |
-| Execute the distribution | Alice 0.39, bob 0.39, carol 0.39, dave 0.39 NEAR; activity pool 0; payouts + retention + maintenance = 2.6 exactly |
+| Record 1 NEAR reported revenue as dave, attest as carol, dispute nothing | Entry Verified; dave has 2 work points; 0.1 NEAR bond held; after the window the bond is released in full |
+| Execute the distribution after the window | Alice 0.351, bob 0.351, carol 0.351, dave 0.507 NEAR; activity pool 0.156, all to dave; payouts + retention + maintenance = 2.6 exactly |
 | Open the community page on the site | A "Member deposits and payouts" chart shows each member's deposits and payouts as bars on one scale, read live from the contract; treasury cards carry a one-line source for every figure |
 | Open the live communities list, type 'lagos' in the search box | Only Lagos Energy Cooperative shows; typing a name that matches nothing says so |
 | Open Create community from the header | The form is on its own page, not below the list |
-| Run `node scripts/verify.mjs --contract ownground2.testnet --community lagos-energy-cooperative-3` | All checks PASS with numbers (29/29 live state checks) |
-| Run `node scripts/verify.mjs --contract ownground2.testnet --community lagos-energy-cooperative-3 --receipts demo-receipts-lagos-energy-cooperative-3.json` | All checks PASS with numbers (89/89 live: 29 state + 60 receipt checks, including exact balance deltas proving the seller, the expense recipient and all four members were paid) |
+| Run `node scripts/verify.mjs --contract ownground3.testnet --community lagos-energy-cooperative-5` | All checks PASS with numbers (31/31 live state checks) |
+| Run `node scripts/verify.mjs --contract ownground3.testnet --community lagos-energy-cooperative-5 --receipts demo-receipts-lagos-energy-cooperative-5.json` | All checks PASS with numbers (97/97 live: 31 state + 66 receipt checks, including exact balance deltas proving the seller, the expense recipient and all four members were paid) |
 | Run `node site/classify.test.cjs` | 22 checks PASS; no failure message is ever a bare "transaction failed" |
 
 ## Why a chain is needed
@@ -204,7 +214,7 @@ Why the contract holds them: the locked-funds guard, the spending policy and the
 | Execute policy change | Anyone, after the timelock | deadline passed, not expired |
 | Refund | Contributor | open campaign, once only |
 | Bond release | Attestor | window passed |
-| Distribution | Anyone | one-shot, payouts sum exactly |
+| Distribution | Anyone | one-shot, payouts sum exactly; blocked while any entry is disputed or still inside its dispute window, so nobody can trigger a payout before a challenge resolves |
 
 Trade-offs: the contract is a single custodian of pooled funds, it is unaudited, and it should only ever hold testnet NEAR. Failed-transfer reconciliation: every transfer the contract initiates carries a private callback — acquire, expense, refund (including claim refunds), distribution payouts and bond returns. If a transfer fails, the callback reverts the state change, so the operation can be retried instead of the ledger counting money that never moved: a failed acquisition puts the campaign back to Funded with no asset recorded, a failed expense is not counted, and a failed refund restores the contribution. Cancel itself moves no money — it only records one claimable refund per contributor — so there is no cancel callback; the money moves when each contributor claims, and a failed claim leaves the claim open for retry. The unit tests cover a failed transfer for every one of these operations, and the first v2 demo run proved it live: the expense transfer failed because the recipient account did not exist yet, and the expense stayed uncounted.
 
@@ -212,7 +222,7 @@ Trezu: Trezu (https://trezu.org) is a Sputnik-DAO-compatible treasury UI, but it
 
 ## Tests
 
-- **115 Rust unit tests, all passing** (`cargo test --lib` in
+- **119 Rust unit tests, all passing** (`cargo test --lib` in
   `contract/`; plain `cargo test` does not run in this VM — the
   near-workspaces build script downloader ignores the proxy, so run
   with `NEAR_SANDBOX_BIN_PATH=$HOME/.near/near-sandbox-2.14.0/near-sandbox
@@ -225,34 +235,42 @@ Trezu: Trezu (https://trezu.org) is a Sputnik-DAO-compatible treasury UI, but it
   cancelled-campaign refunds are claim-based, and a failed claim
   leaves the claim open), policy validation
   (shares sum to 10000, activity_bp ≤ 10000, timelock and dispute
-  window 60s–365d, expense categories capped), and epoch-safe
-  disputes (suspend/restore touch only the entry's own epoch).
+  window 60s–365d, expense categories capped), epoch-safe
+  disputes (suspend/restore touch only the entry's own epoch), and
+  the distribution-timing guard (a distribution is blocked while any
+  entry is Disputed or still inside its dispute window; allowed once
+  the window passes, or with only Pending entries).
 - **Maths scripts, all passing**: `node check-maths.mjs` (34 checks) and
   `node check-maths-activity.mjs` (capital points, work-points formula,
   demo split, dispute flow, epoch reset, circular farming, zero-points
   fallback, activity_bp 0 and 10000, tiny D, spending policy).
 - **Failure classifier, 22 checks passing**: `node site/classify.test.cjs`.
-- **Verifier logic, 25 checks passing**: `node scripts/verify.mjs --selftest`
+- **Verifier logic, 29 checks passing**: `node scripts/verify.mjs --selftest`
   (live run needs a deployed contract: `--contract <id> --community <id>`).
   With `--receipts <demo-receipts-<community>.json>` it also checks
-  every demo tx hash onchain (60 checks for the v2 demo: each tx
+  every demo tx hash onchain (66 checks for the v3 demo: each tx
   succeeded, the over-cap expense failed with the expected reason, and
   the seller, the expense recipient and all four members were paid —
   proved by exact balance deltas across each tx's block window).
-- **Wasm build: SUCCEEDED.** `cargo build --target wasm32-unknown-unknown
-  --release` produces the wasm (725,095 bytes); ABI generated with
-  `cargo near abi` (33 methods). `cargo near build` needs a TTY and
-  fails without one.
-- **Integration test: written and compiles, but stale and cannot run in
-  this VM.** `contract/tests/demo.rs` runs the full demo flow on a
-  near-workspaces sandbox, but it still asserts the v1 numbers, uses a
-  1-nanosecond timelock the new policy validation rejects, and calls
-  `acquire_asset` without the allocation argument — it needs updating
-  to the v2 demo before it can pass anywhere. The sandbox node cannot
-  start here either: it needs the file-descriptor limit raised to
+- **Wasm build: SUCCEEDED.** `cargo near build non-reproducible-wasm`
+  produces the wasm (357,565 bytes); ABI generated with
+  `cargo near abi` (33 methods). A plain `cargo build --target
+  wasm32-unknown-unknown --release` must NOT be used for the
+  deployable wasm: it traps every contract panic as a bare
+  `unreachable` with no message (found live 2026-11-09 — the first
+  v3 demo stopped at step 8 on it), while the cargo-near build
+  carries panic text.
+- **Integration test: updated to the v3 demo and compiles, but marked
+  `#[ignore]` because it cannot run in this VM.**
+  `contract/tests/demo.rs` runs the full demo flow on a
+  near-workspaces sandbox (new numbers, 60-second timelock and
+  dispute window, the allocation argument on `acquire_asset`, dave's
+  attested entry and the bond release). Verify it compiles with
+  `cargo test --test demo --no-run`. The sandbox node cannot
+  start here: it needs the file-descriptor limit raised to
   65535 and this container caps it at 4096, unraisable even as root.
   Run it on a machine where the limit can be raised:
-  `NEAR_SANDBOX_BIN_PATH=~/.near/near-sandbox-2.14.0/near-sandbox cargo test --test demo`.
+  `NEAR_SANDBOX_BIN_PATH=~/.near/near-sandbox-2.14.0/near-sandbox cargo test --test demo -- --ignored`.
 
 ## Limits
 
@@ -280,15 +298,14 @@ Trezu: Trezu (https://trezu.org) is a Sputnik-DAO-compatible treasury UI, but it
   safeguards, and the demo flow.
 - `HOLE_REPORT.md` — the original hole and gap report.
 - `contract/` — one Rust contract (near-sdk), seven internal modules,
-  115 unit tests.
+  119 unit tests.
 - `site/` — static site: landing, communities list, community dashboard,
   asset page, failure classifier with tests. Testnet only.
 - `scripts/verify.mjs` — keyless verifier (invariants 1–10, bonds,
   policy in force). `--selftest` runs without a network. `--receipts`
   checks every demo tx hash onchain and proves the transfers by exact
   balance deltas.
-- `scripts/demo.mjs` — the full 17-step demo run. Run live twice on the
-  v2 contract, both green (logs `demo-log-v2.txt`,
-  `demo-log-v2-attempt3.txt`).
+- `scripts/demo.mjs` — the full 19-step demo run. Run live on the
+  v3 contract, green (log `demo-log-v3.txt`).
 - `check-maths.mjs`, `check-maths-activity.mjs` — the money maths,
   checked with concrete numbers.
