@@ -30,5 +30,12 @@ codegen-units = 1
 opt-level = "z"
 lto = true
 debug = false
-panic = "abort"
+# Unwind, NOT abort: with panic = "abort" every contract panic (a failed
+# assert, a bad argument, the spending-policy rejection) becomes a bare
+# `unreachable` trap with no message, so no caller can ever learn WHY a
+# call failed. The demo's proof 2 requires the receipt to carry the
+# spending-policy panic text ("expense exceeds max_single_expense"), and
+# the site's failure classifier reads panic text too. Unwind keeps the
+# message. (Found live 2026-11-09: create_community trapped with a bare
+# unreachable for every input, including deliberately invalid ones.)
 overflow-checks = true

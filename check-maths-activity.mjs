@@ -118,9 +118,10 @@ const ALLOCS = [["alice", 2500], ["bob", 2500], ["carol", 2500], ["dave", 2500]]
   const acquisitions = 10n * N;
   const revenue = 3n * N + N / 10n; // 3 NEAR onchain + 0.1 bond
   const expenses = 5n * N / 10n;
-  const payouts = 26n * N / 10n;
+  const payouts = 156n * N / 100n; // member pool only; retention 0.65
+  // + maintenance 0.39 stay in the treasury as reserves
   const treasury = contributions + revenue - acquisitions - expenses - payouts;
-  check('dispute treasury final 0.0 NEAR', treasury === 0n, `${treasury}`);
+  check('dispute treasury final 1.04 NEAR', treasury === 104n * N / 100n, `${treasury}`);
   check('dispute D = revenue - expenses = 2.6', revenue - expenses === 26n * N / 10n);
   // Before the dispute, bob held 2 work points (1 NEAR attested entry);
   // after the upheld dispute they are 0 and the activity pool goes to

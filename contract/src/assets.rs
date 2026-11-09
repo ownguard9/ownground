@@ -51,6 +51,10 @@ pub struct Asset {
     /// Cumulative D consumed by this asset's distributions (D formula
     /// only; see the distribution module).
     pub distributed_total: u128,
+    /// Cumulative forfeited attestation bonds for this asset (DESIGN
+    /// fix 9): real money already held by the contract, distributable
+    /// like any other revenue. Set when a dispute is upheld.
+    pub bond_forfeits: u128,
     pub revenue: Vec<RevenueEntry>,
     pub expenses: Vec<ExpenseEntry>,
 }

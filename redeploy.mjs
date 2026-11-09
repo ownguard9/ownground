@@ -1,0 +1,13 @@
+import fs from 'node:fs';
+import { connect, keyStores, KeyPair } from 'near-api-js';
+const accounts = JSON.parse(fs.readFileSync('./.testnet-accounts.json', 'utf8'));
+const keyStore = new keyStores.InMemoryKeyStore();
+await keyStore.setKey('testnet', 'ownground.testnet', KeyPair.fromString(accounts.contract.privateKey));
+const near = await connect({ networkId: 'testnet', nodeUrl: 'https://rpc.testnet.near.org', walletUrl: 'https://testnet.mynearwallet.com/', helperUrl: 'https://helper.testnet.near.org', keyStore });
+const acc = await near.account('ownground.testnet');
+const wasm = fs.readFileSync('./contract/target/wasm32-unknown-unknown/release/ownground.wasm');
+console.log(`redeploying ${wasm.length} bytes ...`);
+const out = await acc.deployContract(wasm);
+console.log('redeploy tx:', out.transaction.hash);
+const stats = await acc.viewFunction({ contractId: 'ownground.testnet', methodName: 'get_stats', args: {} });
+console.log('get_stats after redeploy:', JSON.stringify(stats));

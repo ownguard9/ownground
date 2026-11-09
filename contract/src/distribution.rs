@@ -5,7 +5,7 @@
 //!   transferred to members. Treasury equation only.
 //! * `distributed_total` (on the asset) — cumulative D consumed by executed
 //!   distributions. D formula only:
-//!   D = max(0, revenue_onchain - expenses - distributed_total)
+//!   D = max(0, revenue_onchain + bond_forfeits - expenses - distributed_total)
 //!
 //! The split is integer division with floors. Every remainder goes to
 //! treasury retention, so the split sums exactly to the distributed amount:
@@ -150,8 +150,13 @@ pub fn split_distribution(
 
 /// Distributable earnings for one asset before the availability cap.
 pub fn distributable(asset: &Asset) -> u128 {
+    // Forfeited attestation bonds (DESIGN fix 9) are real money already
+    // held by the contract: they count as revenue for D, exactly as the
+    // community-level total_revenue (and the treasury view) count them.
     asset
         .revenue_onchain()
+        .checked_add(asset.bond_forfeits)
+        .expect("revenue sum overflow")
         .saturating_sub(asset.expenses_total())
         .saturating_sub(asset.distributed_total)
 }
@@ -256,6 +261,7 @@ mod tests {
             epoch: 0,
             work: vec![],
             distributed_total: 0,
+            bond_forfeits: 0,
             revenue: vec![],
             expenses: vec![],
         };
@@ -312,6 +318,54 @@ mod tests {
             bond_status: Some(crate::revenue::BondStatus::Held),
         });
         assert_eq!(distributable(&asset), 0);
+    }
+
+    #[test]
+    fn distributable_includes_forfeited_bond() {
+        // DESIGN fix 9: a forfeited attestation bond is distributable
+        // like any other revenue. Demo scale in tenths of a NEAR: 3.0
+        // onchain + 0.1 bond - 0.5 expense = D 2.6, not 2.5.
+        let mut asset = crate::assets::Asset {
+            id: "a1".to_string(),
+            community_id: "c".to_string(),
+            name: "Generator".to_string(),
+            description: String::new(),
+            category: "energy".to_string(),
+            value: 10,
+            seller: acc("seller.testnet"),
+            allocations: vec![(acc("a.testnet"), 10_000)],
+            status: crate::assets::AssetStatus::Active,
+            created_at: 0,
+            epoch: 0,
+            work: vec![],
+            distributed_total: 0,
+            bond_forfeits: 0,
+            revenue: vec![],
+            expenses: vec![],
+        };
+        asset.revenue.push(crate::revenue::RevenueEntry {
+            amount: 30,
+            source: "rent".to_string(),
+            reference: "inv-1".to_string(),
+            status: crate::revenue::RevenueStatus::Onchain,
+            recorded_at: 0,
+            recorded_by: acc("a.testnet"),
+            attestor: None,
+            verified_at: None,
+            points_awarded: 4,
+            bond_attestor: None,
+            bond_status: None,
+        });
+        asset.expenses.push(crate::revenue::ExpenseEntry {
+            amount: 5,
+            recipient: acc("a.testnet"),
+            description: "fuel".to_string(),
+            category: "operations".to_string(),
+            recorded_at: 0,
+        });
+        assert_eq!(distributable(&asset), 25);
+        asset.bond_forfeits = 1;
+        assert_eq!(distributable(&asset), 26);
     }
 
     #[test]

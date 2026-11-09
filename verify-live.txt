@@ -1,0 +1,34 @@
+OwnGround verify: ownground.testnet / lagos-energy-cooperative
+
+PASS 1 treasury equation treasury=1.040 deposits=13.100 spent=12.060
+PASS 2 locked funds locked=0.000 computed=0.000
+PASS 2 spendable non-negative spendable=1.040
+PASS 5 refunds within contributions refunds=0.000 contributions=10.000
+PASS 10 raw balance covers treasury + storage + bonds raw=11.324 treasury=1.040 storage=0.290 bonds=0.000
+PASS P distribution policy in force founding policy
+PASS P spending policy in force amendment 0 executed
+PASS P activity policy in force founding policy
+PASS 8 spending policy present cap=2.000 reserve=1.000
+PASS 6 expense 0.500 operations within cap amount=0.500 cap=2.000
+PASS 6 expense 0.500 operations allowed category=operations
+PASS 7 entry 0 points by formula alice.ownground.testnet Onchain points=4 expected=4
+PASS 7 lifetime work points for alice.ownground.testnet lifetime=4 awarded=4
+PASS 7 lifetime work points for bob.ownground.testnet lifetime=2 awarded=2
+PASS 7 current points within lifetime (epoch > 0) epoch=1
+PASS 7 capital points recorded, display only alice.ownground.testnet=2, bob.ownground.testnet=2, carol.ownground.testnet=2, dave.ownground.testnet=2
+PASS 3 distribution 0 exact sum D=2.600 member=1.560 retention=0.650 maintenance=0.390
+PASS 3 distribution 0 member = ownership + activity member=1.560 ownership=1.404 activity=0.156
+PASS 9 distribution 0 activity pool not overpaid activity paid=0.156 pool=0.156
+PASS 9 breakdown 0 alice.ownground.testnet total = ownership + activity total=0.507 ownership=0.351 activity=0.156
+PASS 9 breakdown 0 alice.ownground.testnet activity matches work points work=4 activity=0.156
+PASS 9 breakdown 0 bob.ownground.testnet total = ownership + activity total=0.351 ownership=0.351 activity=0.000
+PASS 9 breakdown 0 bob.ownground.testnet activity matches work points work=0 activity=0.000
+PASS 9 breakdown 0 carol.ownground.testnet total = ownership + activity total=0.351 ownership=0.351 activity=0.000
+PASS 9 breakdown 0 carol.ownground.testnet activity matches work points work=0 activity=0.000
+PASS 9 breakdown 0 dave.ownground.testnet total = ownership + activity total=0.351 ownership=0.351 activity=0.000
+PASS 9 breakdown 0 dave.ownground.testnet activity matches work points work=0 activity=0.000
+PASS 4 asset lagos-energy-cooperative-a0 distributed_total = sum of distributions distributed_total=2.600 sum=2.600
+PASS B total bonds held = 0.1 NEAR x held entries held=0.000 entries=0
+PASS P reported entries are claims, not money 0 pending entries, none with points
+
+ALL 30 CHECKS PASSED

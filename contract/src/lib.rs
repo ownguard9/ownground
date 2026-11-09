@@ -12,7 +12,8 @@
 //!              - (acquisitions + expenses + distribution payouts + refunds)
 //!   * locked = sum of raised over open/funded campaigns; spends may only
 //!     draw on treasury - locked.
-//!   * D (per asset) = max(0, revenue_onchain - expenses - distributed_total),
+//!   * D (per asset) = max(0, revenue_onchain + bond_forfeits - expenses
+//!     - distributed_total),
 //!     capped by available funds: D_effective = min(D, treasury - locked).
 //!   * A distribution splits D_effective exactly: member payouts +
 //!     retention (incl. remainders) + maintenance = D_effective.
@@ -148,6 +149,7 @@ impl Contract {
     /// as given; the contract cannot verify the DAO exists without a
     /// cross-contract call. Later policy changes go only through the
     /// two-step amendment flow (propose, wait the timelock, execute).
+    #[payable]
     pub fn create_community(
         &mut self,
         id: String,
@@ -186,6 +188,7 @@ impl Contract {
 
     /// Create a funding campaign. Caller must be a community member.
     /// Attaches exactly 0.05 NEAR storage.
+    #[payable]
     pub fn create_campaign(
         &mut self,
         community_id: String,
@@ -215,6 +218,7 @@ impl Contract {
     /// Contribute to a campaign. Attached deposit = contribution + 0.01
     /// NEAR storage. Rejected past the target, when the campaign is not
     /// open, or after its deadline.
+    #[payable]
     pub fn contribute(&mut self, campaign_id: String) {
         let attached = env::attached_deposit().as_yoctonear();
         assert!(attached > STORAGE_RECORD, "attached deposit must exceed the 0.01 NEAR storage deposit");
@@ -264,6 +268,7 @@ impl Contract {
     /// Acquire the asset a campaign funded. DAO only. Transfers the target
     /// to the seller in the same call and counts it as acquisition spend.
     /// Attaches exactly 0.01 NEAR storage.
+    #[payable]
     pub fn acquire_asset(
         &mut self,
         campaign_id: String,
@@ -299,6 +304,7 @@ impl Contract {
             epoch: 0,
             work: Vec::new(),
             distributed_total: 0,
+            bond_forfeits: 0,
             revenue: Vec::new(),
             expenses: Vec::new(),
         };
@@ -328,6 +334,7 @@ impl Contract {
 
     /// Cancel a campaign and refund every contributor exactly once.
     /// DAO only, only from open/funded status. Attaches 0.01 NEAR storage.
+    #[payable]
     pub fn cancel_campaign(&mut self, campaign_id: String) {
         self.require_attached(STORAGE_RECORD);
         let mut campaign = self.campaign(&campaign_id);
@@ -365,6 +372,7 @@ impl Contract {
     /// way (the DAO cancels it instead). Attaches exactly 0.01 NEAR
     /// storage. The member's capital points are recomputed from their
     /// remaining cumulative total.
+    #[payable]
     pub fn refund(&mut self, campaign_id: String) {
         self.require_attached(STORAGE_RECORD);
         let mut campaign = self.campaign(&campaign_id);
@@ -424,6 +432,7 @@ impl Contract {
     ///   different member attests it.
     /// The evidence reference is required and unique per asset: a second
     /// entry with the same reference is rejected.
+    #[payable]
     pub fn record_revenue(
         &mut self,
         asset_id: String,
@@ -498,6 +507,7 @@ impl Contract {
     /// the bond is held by the contract until the dispute window passes
     /// or a dispute is resolved. The attestor earns no points and no
     /// reward: verification is a duty, not a reward.
+    #[payable]
     pub fn attest_revenue(&mut self, asset_id: String, entry_id: u64) {
         let attached = env::attached_deposit().as_yoctonear();
         assert_eq!(
@@ -553,6 +563,7 @@ impl Contract {
     /// suspended: removed from the recorder's current-epoch points,
     /// floored at 0. A distribution already paid is never re-run.
     /// Attaches exactly 0.01 NEAR storage.
+    #[payable]
     pub fn dispute_revenue(&mut self, asset_id: String, entry_id: u64) {
         self.require_attached(STORAGE_RECORD);
         let mut asset = self.asset(&asset_id);
@@ -604,6 +615,7 @@ impl Contract {
     /// * uphold = false: the verification stands. The entry returns to
     ///   Verified, the suspended points are restored, and the bond is
     ///   returned to the attestor.
+    #[payable]
     pub fn resolve_dispute(&mut self, asset_id: String, entry_id: u64, uphold: bool) {
         self.require_attached(STORAGE_RECORD);
         let mut asset = self.asset(&asset_id);
@@ -631,7 +643,12 @@ impl Contract {
             // The forfeited bond enters the treasury as revenue: it is
             // real money already held by the contract, so the treasury
             // equation stays exact and the bond becomes distributable.
-            // The recorder's points stay removed.
+            // Record it on the asset too, so the per-asset D formula
+            // (distributable) sees it; the recorder's points stay removed.
+            asset.bond_forfeits = asset
+                .bond_forfeits
+                .checked_add(ATTESTATION_BOND)
+                .expect("bond forfeits overflow");
             community.total_revenue = community
                 .total_revenue
                 .checked_add(ATTESTATION_BOND)
@@ -670,6 +687,7 @@ impl Contract {
     /// entry. Attaches exactly 0.01 NEAR storage. The bond is returned
     /// by transfer with a callback: if the transfer fails, the bond
     /// stays held and the attestor can retry.
+    #[payable]
     pub fn release_attestation_bond(&mut self, asset_id: String, entry_id: u64) {
         self.require_attached(STORAGE_RECORD);
         let mut asset = self.asset(&asset_id);
@@ -719,6 +737,7 @@ impl Contract {
     /// exactly 0.01 NEAR storage. Enforcement order, before any transfer:
     /// the locked-funds guard, then the spending policy if the DAO set one
     /// (single-expense cap, treasury reserve floor, allowed category).
+    #[payable]
     pub fn pay_expense(
         &mut self,
         asset_id: String,
@@ -741,14 +760,14 @@ impl Contract {
         // beyond the policy, the community must first pass a separate
         // policy amendment, and only then propose the expense.
         let policy = &community.spending_policy;
-        if policy.max_single_expense > 0 {
+        if policy.max_single_expense.0 > 0 {
             assert!(
-                amount <= policy.max_single_expense,
+                amount <= policy.max_single_expense.0,
                 "expense exceeds max_single_expense"
             );
         }
         assert!(
-            available - amount >= policy.min_treasury_reserve,
+            available - amount >= policy.min_treasury_reserve.0,
             "expense would breach min_treasury_reserve"
         );
         assert!(
@@ -788,6 +807,7 @@ impl Contract {
     /// a policy type supersedes any pending amendment of that type. The
     /// old policy stays in force until an amendment is executed.
     /// Attaches exactly 0.01 NEAR storage. Returns the amendment id.
+    #[payable]
     pub fn propose_policy_change(
         &mut self,
         community_id: String,
@@ -836,6 +856,7 @@ impl Contract {
     /// policy_amendment_executed with the old and new parameters.
     /// Executing before the deadline, or after expiry, is rejected.
     /// Attaches exactly 0.01 NEAR storage.
+    #[payable]
     pub fn execute_policy_change(&mut self, community_id: String, amendment_id: u64) {
         self.require_attached(STORAGE_RECORD);
         let mut community = self.community(&community_id);
@@ -880,6 +901,7 @@ impl Contract {
 
     /// Cancel a pending policy amendment. DAO only. Attaches exactly
     /// 0.01 NEAR storage.
+    #[payable]
     pub fn cancel_policy_change(&mut self, community_id: String, amendment_id: u64) {
         self.require_attached(STORAGE_RECORD);
         let mut community = self.community(&community_id);
@@ -910,8 +932,8 @@ impl Contract {
                 activity_bp: community.policy.activity_bp,
             },
             PolicyType::Spending => PolicyParams::Spending {
-                max_single_expense: U128(community.spending_policy.max_single_expense),
-                min_treasury_reserve: U128(community.spending_policy.min_treasury_reserve),
+                max_single_expense: community.spending_policy.max_single_expense,
+                min_treasury_reserve: community.spending_policy.min_treasury_reserve,
                 allowed_categories: community.spending_policy.allowed_categories.clone(),
             },
             PolicyType::Activity => PolicyParams::Activity {
@@ -960,8 +982,8 @@ impl Contract {
                 PolicyParams::Spending { max_single_expense, min_treasury_reserve, allowed_categories },
             ) => {
                 community.spending_policy = SpendingPolicy {
-                    max_single_expense: max_single_expense.0,
-                    min_treasury_reserve: min_treasury_reserve.0,
+                    max_single_expense: *max_single_expense,
+                    min_treasury_reserve: *min_treasury_reserve,
                     allowed_categories: allowed_categories.clone(),
                 };
             }
@@ -988,6 +1010,7 @@ impl Contract {
     /// reconciles a failed transfer). A second call with no new revenue
     /// computes D = 0 and is rejected — that rejection IS the one-shot
     /// guard.
+    #[payable]
     pub fn execute_distribution(&mut self, asset_id: String) -> DistributionRecordView {
         self.require_attached(STORAGE_RECORD);
         let mut asset = self.asset(&asset_id);
@@ -1240,6 +1263,7 @@ pub struct AssetView {
     pub epoch: u64,
     pub work_points: Vec<(AccountId, WorkPointsView)>,
     pub distributed_total: U128,
+    pub bond_forfeits: U128,
     pub revenue_onchain: U128,
     pub expenses_total: U128,
     pub revenue_count: usize,
@@ -1507,6 +1531,7 @@ impl Contract {
                 })
                 .collect(),
             distributed_total: U128(a.distributed_total),
+            bond_forfeits: U128(a.bond_forfeits),
             revenue_onchain: U128(revenue_onchain),
             expenses_total: U128(expenses_total),
             revenue_count,
@@ -1771,8 +1796,8 @@ mod tests {
     /// maintenance + operations.
     fn demo_spending() -> SpendingPolicy {
         SpendingPolicy {
-            max_single_expense: NEAR,
-            min_treasury_reserve: NEAR,
+            max_single_expense: U128(NEAR),
+            min_treasury_reserve: U128(NEAR),
             allowed_categories: vec!["maintenance".to_string(), "operations".to_string()],
         }
     }
@@ -1781,8 +1806,8 @@ mod tests {
     /// large expenses outside the demo policy).
     fn open_spending() -> SpendingPolicy {
         SpendingPolicy {
-            max_single_expense: 0,
-            min_treasury_reserve: 0,
+            max_single_expense: U128(0),
+            min_treasury_reserve: U128(0),
             allowed_categories: vec!["maintenance".to_string(), "operations".to_string()],
         }
     }
@@ -1869,7 +1894,7 @@ mod tests {
         assert_eq!(v.storage_reserve.0, STORAGE_CREATE_COMMUNITY);
         assert_eq!(v.policy.members_bp, 6000);
         assert_eq!(v.policy.activity_bp, 1000);
-        assert_eq!(v.spending_policy.max_single_expense, NEAR);
+        assert_eq!(v.spending_policy.max_single_expense, U128(NEAR));
         assert_eq!(v.activity_policy.capital_per_near, 1);
     }
 
@@ -2476,7 +2501,7 @@ mod tests {
         // rule: execution is permissionless, proposal and cancel are DAO).
         execute_amendment(&mut c, id, T0 + 4 * 24 * 60 * 60 * 1_000_000_000);
         let p = c.get_policies("lagos-energy".to_string());
-        assert_eq!(p.spending.max_single_expense, 2 * NEAR);
+        assert_eq!(p.spending.max_single_expense, U128(2 * NEAR));
         assert_eq!(p.amendments.len(), 1);
         assert_eq!(p.amendments[0].status, AmendmentStatus::Executed);
         assert_eq!(p.amendments[0].policy_type, PolicyType::Spending);
@@ -2511,7 +2536,7 @@ mod tests {
         c.cancel_policy_change("lagos-energy".to_string(), id);
         let p = c.get_policies("lagos-energy".to_string());
         assert_eq!(p.amendments[0].status, AmendmentStatus::Cancelled);
-        assert_eq!(p.spending.max_single_expense, NEAR, "the old policy stays in force");
+        assert_eq!(p.spending.max_single_expense, U128(NEAR), "the old policy stays in force");
         // Executing a cancelled amendment is rejected.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             execute_amendment(&mut c, id, T0 + 4 * 24 * 60 * 60 * 1_000_000_000);
@@ -2544,7 +2569,7 @@ mod tests {
         // The newer one executes and applies.
         execute_amendment(&mut c, second, T0 + 4 * 24 * 60 * 60 * 1_000_000_000);
         let p = c.get_policies("lagos-energy".to_string());
-        assert_eq!(p.spending.max_single_expense, 3 * NEAR);
+        assert_eq!(p.spending.max_single_expense, U128(3 * NEAR));
     }
 
     #[test]
@@ -2915,8 +2940,8 @@ mod tests {
         // Uncapped but with a 1 NEAR reserve: a 2.5 NEAR expense would
         // leave 0.5 NEAR of the 3 NEAR unlocked treasury.
         let (mut c, campaign_id) = setup_funded_with(SpendingPolicy {
-            max_single_expense: 0,
-            min_treasury_reserve: NEAR,
+            max_single_expense: U128(0),
+            min_treasury_reserve: U128(NEAR),
             allowed_categories: vec!["maintenance".to_string(), "operations".to_string()],
         });
         let asset_id = acquire(&mut c, &campaign_id);
@@ -2966,8 +2991,8 @@ mod tests {
         }));
         assert!(result.is_err());
         let p = c.get_policies("lagos-energy".to_string());
-        assert_eq!(p.spending.max_single_expense, NEAR);
-        assert_eq!(p.spending.min_treasury_reserve, NEAR);
+        assert_eq!(p.spending.max_single_expense, U128(NEAR));
+        assert_eq!(p.spending.min_treasury_reserve, U128(NEAR));
     }
 
     // -- Capital points ------------------------------------------------------

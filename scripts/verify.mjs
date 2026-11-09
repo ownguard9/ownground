@@ -36,7 +36,7 @@
 const N = 10n ** 24n;
 const BOND = N / 10n; // 0.1 NEAR attestation bond
 const RPCS = [
-  "https://rpc.testnet.near.org",
+  "https://rpc.testnet.fastnear.com",
   "https://testnet.nearblocks.io",
   "https://near-testnet.drpc.org",
 ];

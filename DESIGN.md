@@ -989,7 +989,8 @@ fix below is what the contract actually implements, and why.
     (total_revenue 3.1 minus expenses 0.5), member pool 1.56 NEAR,
     activity pool 0.156 NEAR, ownership pool 1.404 NEAR. Alice
     0.507 NEAR, bob 0.351 NEAR, carol 0.351 NEAR, dave 0.351 NEAR.
-    Final treasury 0.0 NEAR exactly. (The earlier recorded numbers —
+    Final treasury 1.04 NEAR exactly (retention 0.65 + maintenance 0.39
+    remain as reserves; only the 1.56 NEAR member pool leaves). (The earlier recorded numbers —
     D 2.5, alice 0.4375, bob 0.3875, others 0.3375, treasury 1.0 —
     were the pre-dispute split and are kept in the maths script as the
     mid-flow "verified activity earns points" check.)
@@ -1021,7 +1022,8 @@ fix below is what the contract actually implements, and why.
     drop from 2 to 0 before the distribution. The final numbers are
     recomputed in this section (fix 11) and in check-maths-activity.mjs:
     D 2.6, alice 0.507, bob 0.351, carol 0.351, dave 0.351, retention
-    0.65, maintenance 0.39, final treasury 0.0 NEAR. The pre-dispute
+    0.65, maintenance 0.39, final treasury 1.04 NEAR (the retained shares
+    stay as reserves). The pre-dispute
     split (alice 0.4375, bob 0.3875) is still the mid-flow proof that
     verified activity earns points. The demo order is fixed: dispute
     and DAO resolution happen before execute_distribution.

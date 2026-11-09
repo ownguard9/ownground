@@ -72,10 +72,10 @@ impl DistributionPolicy {
 #[serde(crate = "near_sdk::serde")]
 pub struct SpendingPolicy {
     /// Largest single expense allowed in yoctoNEAR. 0 means no cap.
-    pub max_single_expense: u128,
+    pub max_single_expense: U128,
     /// Treasury floor: an expense is rejected if it would take the
     /// unlocked treasury (treasury - locked) below this.
-    pub min_treasury_reserve: u128,
+    pub min_treasury_reserve: U128,
     /// Expense categories the community permits.
     pub allowed_categories: Vec<String>,
 }
@@ -251,8 +251,8 @@ impl Community {
             members,
             policy: DistributionPolicy::new(6000, 2500, 1500),
             spending_policy: SpendingPolicy {
-                max_single_expense: 0,
-                min_treasury_reserve: 0,
+                max_single_expense: U128(0),
+                min_treasury_reserve: U128(0),
                 allowed_categories: Vec::new(),
             },
             activity_policy: ActivityPolicy::default(),

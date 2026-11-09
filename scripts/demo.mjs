@@ -1,17 +1,27 @@
 // OwnGround demo run: Lagos Energy Cooperative.
-// DO NOT RUN LIVE. There is no OwnGround wallet yet, and this script
-// moves real testnet NEAR. It is written so the run is reproducible
-// once Isaiah hands over the OwnGround wallet and GitHub identity.
+// RAN LIVE on testnet 2026-11-09: contract ownground.testnet, DAO
+// lagos-energy.testnet, members alice/bob/carol/dave.ownground.testnet,
+// seller seller.ownground.testnet. Run output is saved to
+// demo-log-live.txt.
 //
-//   1. npm install near-api-js   (in ~/workspace/commonhold)
+//   1. npm install near-api-js@5.1.1   (in ~/workspace/commonhold)
 //   2. Create the demo accounts on testnet and fund them:
-//      alice, bob, carol, dave (2.6 NEAR each; alice needs 3.2 NEAR
-//      for the onchain revenue deposit and the attestation bond),
-//      plus a demo seller account (no funds needed) and a Sputnik DAO
-//      with alice, bob, carol, dave as council, threshold 2.
+//      alice.ownground.testnet (6.5 NEAR), bob/carol/dave.ownground.testnet
+//      (3 NEAR each), seller.ownground.testnet (0.2 NEAR), plus the
+//      Sputnik DAO lagos-energy.testnet with the four as council,
+//      threshold 2 (absolute Weight threshold, not the factory default
+//      Ratio 1/2, which would need 3 of 4 approvals).
 //      Keys must be in ~/.near-credentials/testnet (near-cli layout).
-//   3. OWNGROUND_CONTRACT=ownground.testnet OWNGROUND_DAO=lagos-energy.sputnikv2.testnet \
-//      DEMO_SELLER=demo-seller.testnet node scripts/demo.mjs
+//      Member names are subaccounts of ownground.testnet because the
+//      top-level alice.testnet etc. are taken by other people.
+//   3. OWNGROUND_CONTRACT=ownground.testnet OWNGROUND_DAO=lagos-energy.testnet \
+//      DEMO_SELLER=seller.ownground.testnet node scripts/demo.mjs
+//
+// The DAO is NOT a sputnikv2.testnet factory subaccount: a factory DAO is
+// keyless, but this script signs add_proposal as the DAO itself, so the DAO
+// was deployed directly (live Sputnik v2 wasm, read off-chain from
+// genesis.sputnikv2.testnet) to lagos-energy.testnet, whose key we hold —
+// the same approach FairShare used for fairshare-dao.testnet.
 //
 // The script verifies every expected number and aborts on the first
 // mismatch. Expected final numbers (DESIGN.md fix 11 and 15):
@@ -33,9 +43,13 @@ const fmt = (v) => {
 const CONTRACT = process.env.OWNGROUND_CONTRACT;
 const DAO = process.env.OWNGROUND_DAO;
 const SELLER = process.env.DEMO_SELLER;
-const MEMBERS = ["alice.testnet", "bob.testnet", "carol.testnet", "dave.testnet"];
+const MEMBERS = ["alice.ownground.testnet", "bob.ownground.testnet", "carol.ownground.testnet", "dave.ownground.testnet"];
 const COMMUNITY = "lagos-energy-cooperative";
-const ASSET = "generator";
+// The contract generates campaign and asset ids (e.g. lagos-energy-cooperative-c0,
+// lagos-energy-cooperative-a0) and acquire_asset takes an ownership allocation.
+// Both ids are read back from get_community after the calls that create them.
+let CAMPAIGN_ID = "";
+let ASSET_ID = "";
 const GAS = "100000000000000"; // 100 TGas
 
 let nearApi;
@@ -53,11 +67,15 @@ if (!CONTRACT || !DAO || !SELLER) {
 }
 
 const keyStore = new keyStores.UnencryptedFileSystemKeyStore(
-  path.join(os.homedir(), ".near-credentials", "testnet"),
+  // Root is ~/.near-credentials: near-api-js 5.x appends the network id,
+  // so keys live at ~/.near-credentials/testnet/<account>.json (near-cli
+  // layout). Pointing this at the testnet dir itself would make it look
+  // under testnet/testnet/ and find nothing.
+  path.join(os.homedir(), '.near-credentials'),
 );
 const near = await connect({
   networkId: "testnet",
-  nodeUrl: "https://rpc.testnet.near.org",
+  nodeUrl: "https://rpc.testnet.fastnear.com",
   walletUrl: "https://testnet.mynearwallet.com",
   helperUrl: "https://helper.testnet.near.org",
   explorerUrl: "https://testnet.nearblocks.io",
@@ -98,13 +116,18 @@ async function view(method, args) {
 }
 async function callAs(id, method, args, depositYocto, gas = GAS) {
   const acc = await account(id);
-  return acc.functionCall({
+  const outcome = await acc.functionCall({
     contractId: CONTRACT,
     methodName: method,
     args,
     gas: BigInt(gas),
     attachedDeposit: BigInt(depositYocto),
   });
+  // Settle pause: a view issued immediately after a write can read
+  // pre-transaction state (the node lags finality by ~a block), so give
+  // the write a moment to become visible before the next view.
+  await sleep(1500);
+  return outcome;
 }
 async function balanceOf(id) {
   const acc = await account(id);
@@ -115,20 +138,31 @@ async function balanceOf(id) {
 // council members. Returns the proposal id and the final proposal state.
 async function daoCall(description, method, args, depositYocto, voters) {
   const dao = await account(DAO);
+  // Sputnik v2 add_proposal takes { proposal: ProposalInput }; the action
+  // gas/deposit are stringly-typed (U64/U128), as in the FairShare scripts.
   const proposalArgs = {
-    description,
-    kind: {
-      FunctionCall: {
-        receiver_id: CONTRACT,
-        actions: [{
-          method_name: method,
-          args: Buffer.from(JSON.stringify(args)).toString("base64"),
-          deposit: depositYocto.toString(),
-          gas: BigInt(GAS),
-        }],
+    proposal: {
+      description,
+      kind: {
+        FunctionCall: {
+          receiver_id: CONTRACT,
+          actions: [{
+            method_name: method,
+            args: Buffer.from(JSON.stringify(args)).toString('base64'),
+            deposit: depositYocto.toString(),
+            gas: GAS.toString(),
+          }],
+        },
       },
     },
   };
+  // Read the next proposal id BEFORE creating it: get_last_proposal_id
+  // returns the id the next proposal will get, and reading it after the
+  // add_proposal can return the stale pre-write count (same finality lag
+  // as the views), which once made the demo vote on the previous, already
+  // approved proposal. This is the FairShare pattern.
+  const daoAcc = await account(DAO);
+  const proposalId = Number(await daoAcc.viewFunction({ contractId: DAO, methodName: 'get_last_proposal_id', args: {} }));
   await dao.functionCall({
     contractId: DAO,
     methodName: "add_proposal",
@@ -136,27 +170,51 @@ async function daoCall(description, method, args, depositYocto, voters) {
     gas: BigInt(GAS),
     attachedDeposit: utils.format.parseNearAmount("1"),
   });
-  // The proposal id is the next id: count the proposals so far.
-  const daoAcc = await account(DAO);
-  const count = await daoAcc.viewFunction({ contractId: DAO, methodName: "get_proposal_count", args: {} });
-  const proposalId = Number(count) - 1;
   note(`DAO proposal ${proposalId}: ${description}`);
+  // A vote that reaches threshold executes the proposal in the same
+  // receipt chain, so if the contract call inside it panics (step 8's
+  // over-cap expense), near-api-js throws on the vote itself. Catch it:
+  // the vote landed, the proposal is decided, and the panic text is in
+  // the error message — record it instead of crashing the demo.
   let lastOutcome = null;
+  let voteError = null;
   for (const voter of voters) {
     const v = await account(voter);
-    lastOutcome = await v.functionCall({
-      contractId: DAO,
-      methodName: "act_proposal",
-      args: { id: proposalId, action: "VoteApprove" },
-      gas: BigInt(GAS),
-      attachedDeposit: 0n,
-    });
-    note(`${voter} voted Approve on proposal ${proposalId}`);
+    try {
+      // 150 TGas: the deciding vote must cover the DAO's own cost PLUS the
+      // 100 TGas the action forwards to the contract (FairShare votes use
+      // 150 TGas for this reason).
+      lastOutcome = await v.functionCall({
+        contractId: DAO,
+        methodName: 'act_proposal',
+        args: { id: proposalId, action: 'VoteApprove' },
+        gas: 150000000000000n,
+        attachedDeposit: 0n,
+      });
+      note(`${voter} voted Approve on proposal ${proposalId}`);
+    } catch (e) {
+      // Only swallow the error when the vote LANDED but the proposal
+      // execution it triggered failed (the message carries the contract
+      // ExecutionError). Any other failure — e.g. the voter cannot even
+      // afford the vote's prepaid gas — means the vote never landed, so
+      // re-throw at once instead of polling a proposal that stays open.
+      if (!String(e.message || e).includes("ExecutionError")) throw e;
+      voteError = e;
+      note(`${voter} voted Approve on proposal ${proposalId} (execution failed: ${String(e.message).slice(0, 140)})`);
+      break;
+    }
   }
   // Poll until the proposal leaves InProgress.
   for (let i = 0; i < 30; i++) {
     const prop = await daoAcc.viewFunction({ contractId: DAO, methodName: "get_proposal", args: { id: proposalId } });
-    if (prop.status !== "InProgress") return { proposalId, status: prop.status, panics: receiptPanics(lastOutcome) };
+    if (prop.status !== "InProgress") {
+      const panics = lastOutcome ? receiptPanics(lastOutcome) : [];
+      if (voteError) {
+        const m = String(voteError.message || voteError);
+        if (!panics.includes(m)) panics.push(m);
+      }
+      return { proposalId, status: prop.status, panics };
+    }
     await sleep(2000);
   }
   throw new Error(`DAO proposal ${proposalId} never left InProgress`);
@@ -221,16 +279,19 @@ await callAs(ALICE, "create_campaign", {
   target: (10n * N).toString(),
   deadline,
 }, (5n * N / 100n).toString());
-const campaign = await view("get_campaign", { campaign_id: ASSET });
+const commAfterCampaign = await view("get_community", { community_id: COMMUNITY });
+CAMPAIGN_ID = commAfterCampaign.campaign_ids[0];
+note(`campaign id is ${CAMPAIGN_ID}`);
+const campaign = await view("get_campaign", { campaign_id: CAMPAIGN_ID });
 assertEq(campaign.target, 10n * N, "campaign target 10 NEAR");
 
 // --- Step 3: four contributions ------------------------------------------
 step(3, "Four members contribute 2.5 NEAR each");
 for (const m of MEMBERS) {
-  await callAs(m, "contribute", { campaign_id: ASSET }, ((25n * N / 10n) + (N / 100n)).toString());
+  await callAs(m, "contribute", { campaign_id: CAMPAIGN_ID }, ((25n * N / 10n) + (N / 100n)).toString());
   note(`${m} contributed 2.5 NEAR`);
 }
-const funded = await view("get_campaign", { campaign_id: ASSET });
+const funded = await view("get_campaign", { campaign_id: CAMPAIGN_ID });
 assertEq(funded.raised, 10n * N, "raised 10 NEAR");
 assertTrue(funded.status === "Funded", "campaign Funded");
 
@@ -238,38 +299,42 @@ assertTrue(funded.status === "Funded", "campaign Funded");
 step(4, "DAO acquires the generator, 10 NEAR to the seller");
 const sellerBefore = await balanceOf(SELLER);
 const acq = await daoCall("Acquire the generator for 10 NEAR", "acquire_asset", {
-  campaign_id: ASSET,
+  campaign_id: CAMPAIGN_ID,
   seller: SELLER,
+  allocation: [[ALICE, 2500], [BOB, 2500], [CAROL, 2500], [DAVE, 2500]],
 }, (N / 100n).toString(), [ALICE, BOB]);
 assertTrue(acq.status === "Approved", `acquisition proposal ${acq.status}`);
 const sellerAfter = await balanceOf(SELLER);
 assertEq(sellerAfter - sellerBefore, 10n * N, "seller received 10 NEAR");
-const asset = await view("get_asset", { asset_id: ASSET });
+const commAfterAcquire = await view("get_community", { community_id: COMMUNITY });
+ASSET_ID = commAfterAcquire.asset_ids[0];
+note(`asset id is ${ASSET_ID}`);
+const asset = await view("get_asset", { asset_id: ASSET_ID });
 assertEq(asset.value, 10n * N, "asset value 10 NEAR");
 assertTrue(asset.seller === SELLER, "asset seller recorded");
 
 // --- Step 5: onchain revenue ---------------------------------------------
 step(5, "Alice records 3 NEAR onchain revenue");
 await callAs(ALICE, "record_revenue", {
-  asset_id: ASSET, amount: (3n * N).toString(), source: "Generator rental", reference: "invoice-001",
+  asset_id: ASSET_ID, amount: (3n * N).toString(), source: "Generator rental", reference: "invoice-001",
 }, ((3n * N) + (N / 100n)).toString());
-const rev1 = await view("get_revenue", { asset_id: ASSET });
+const rev1 = await view("get_revenue", { asset_id: ASSET_ID });
 assertTrue(rev1[0].status === "Onchain", "entry 0 Verified onchain");
 assertEq(rev1[0].points_awarded, 4, "alice work points 4 (1 + 3 per NEAR)");
 
 // --- Step 6: reported revenue (proof 3) ----------------------------------
 step(6, "Bob records 1 NEAR reported revenue (proof: unverified earns no points)");
 await callAs(BOB, "record_revenue", {
-  asset_id: ASSET, amount: N.toString(), source: "Generator rental", reference: "invoice-002",
+  asset_id: ASSET_ID, amount: N.toString(), source: "Generator rental", reference: "invoice-002",
 }, (N / 100n).toString());
-const rev2 = await view("get_revenue", { asset_id: ASSET });
+const rev2 = await view("get_revenue", { asset_id: ASSET_ID });
 assertTrue(rev2[1].status === "Pending", "entry 1 Reported, not independently verified");
 assertEq(rev2[1].points_awarded, 0, "PROOF 3: unverified revenue earns no points");
 
 // --- Step 7: attestation (proof 4) ---------------------------------------
 step(7, "Alice attests bob's entry with a 0.1 NEAR bond (proof: verified activity earns points)");
-await callAs(ALICE, "attest_revenue", { asset_id: ASSET, entry_id: 1 }, ((N / 10n) + (N / 100n)).toString());
-const rev3 = await view("get_revenue", { asset_id: ASSET });
+await callAs(ALICE, "attest_revenue", { asset_id: ASSET_ID, entry_id: 1 }, ((N / 10n) + (N / 100n)).toString());
+const rev3 = await view("get_revenue", { asset_id: ASSET_ID });
 assertTrue(rev3[1].status === "Verified", "entry 1 Verified by attestation");
 assertEq(rev3[1].points_awarded, 2, "PROOF 4: bob work points 2 (1 + 1 per NEAR)");
 const t3 = await view("get_treasury", { community_id: COMMUNITY });
@@ -278,7 +343,7 @@ assertEq(t3.total_bonds_held, N / 10n, "bond held 0.1 NEAR");
 // --- Step 8: over-cap expense fails onchain (proof 2) --------------------
 step(8, "DAO tries a 2 NEAR expense (proof: excessive expense fails onchain with the reason)");
 const bad = await daoCall("Pay 2 NEAR for operations", "pay_expense", {
-  asset_id: ASSET, amount: (2n * N).toString(), recipient: "ops.testnet",
+  asset_id: ASSET_ID, amount: (2n * N).toString(), recipient: "ops.ownground.testnet",
   description: "Oversized service bill", category: "operations",
 }, (N / 100n).toString(), [ALICE, BOB]);
 // The DAO proposal executes, but the contract call inside it must fail
@@ -294,7 +359,7 @@ assertTrue(
 // --- Step 9: valid expense succeeds (proof 1) ---------------------------
 step(9, "DAO pays a 0.5 NEAR operations expense (proof: valid expense succeeds)");
 await daoCall("Pay 0.5 NEAR for operations", "pay_expense", {
-  asset_id: ASSET, amount: (5n * N / 10n).toString(), recipient: "ops.testnet",
+  asset_id: ASSET_ID, amount: (5n * N / 10n).toString(), recipient: "ops.ownground.testnet",
   description: "Generator service", category: "operations",
 }, (N / 100n).toString(), [ALICE, BOB]);
 const t5 = await view("get_treasury", { community_id: COMMUNITY });
@@ -319,19 +384,19 @@ const amendmentDeadline = Number(BigInt(pol1.amendments[0].deadline) / 1000000n)
 
 // --- Step 11: dispute flow (proof 7, part 1) ----------------------------
 step(11, "Carol disputes bob's attested entry (points suspended)");
-await callAs(CAROL, "dispute_revenue", { asset_id: ASSET, entry_id: 1 }, (N / 100n).toString());
-const rev4 = await view("get_revenue", { asset_id: ASSET });
+await callAs(CAROL, "dispute_revenue", { asset_id: ASSET_ID, entry_id: 1 }, (N / 100n).toString());
+const rev4 = await view("get_revenue", { asset_id: ASSET_ID });
 assertTrue(rev4[1].status === "Disputed", "entry 1 Disputed, points suspended");
-const act1 = await view("get_activity", { asset_id: ASSET });
+const act1 = await view("get_activity", { asset_id: ASSET_ID });
 const bobNow = act1.work_points.find(([a]) => a === BOB);
 assertEq(bobNow ? bobNow[1].current : 0, 0, "bob current work points 0 while disputed");
 
 // --- Step 12: DAO upholds the dispute (proof 7, part 2) -----------------
 step(12, "DAO upholds the dispute: entry rejected, points removed, bond to treasury");
 await daoCall("Uphold the dispute on entry 1", "resolve_dispute", {
-  asset_id: ASSET, entry_id: 1, uphold: true,
+  asset_id: ASSET_ID, entry_id: 1, uphold: true,
 }, (N / 100n).toString(), [ALICE, BOB]);
-const rev5 = await view("get_revenue", { asset_id: ASSET });
+const rev5 = await view("get_revenue", { asset_id: ASSET_ID });
 assertTrue(rev5[1].status === "Rejected", "PROOF 7: entry 1 Rejected");
 assertTrue(rev5[1].bond_status === "Forfeited", "bond forfeited");
 const t6 = await view("get_treasury", { community_id: COMMUNITY });
@@ -349,8 +414,8 @@ assertTrue(pol2.amendments[0].status === "Executed", "amendment 0 Executed");
 
 // --- Step 14: distribution (proofs 5 and 6) ------------------------------
 step(14, "Execute the distribution");
-await callAs(ALICE, "execute_distribution", { asset_id: ASSET }, (N / 100n).toString());
-const dists = await view("get_distributions", { asset_id: ASSET });
+await callAs(ALICE, "execute_distribution", { asset_id: ASSET_ID }, (N / 100n).toString());
+const dists = await view("get_distributions", { asset_id: ASSET_ID });
 const d = dists[0];
 assertEq(d.distributed, 26n * N / 10n, "D = 2.6 NEAR");
 assertEq(d.member_total, 156n * N / 100n, "member pool 1.56 NEAR");
@@ -373,9 +438,9 @@ assertTrue(d.unpaid.length === 0, "no unpaid members");
 // --- Step 15: final state -------------------------------------------------
 step(15, "Final state");
 const tf = await view("get_treasury", { community_id: COMMUNITY });
-assertEq(tf.treasury, 0, "final treasury 0.0 NEAR exactly");
+assertEq(tf.treasury, 104n * N / 100n, "final treasury 1.04 NEAR (retention 0.65 + maintenance 0.39 remain as reserves)");
 assertEq(tf.distributable, 0, "nothing left distributable");
-const actF = await view("get_activity", { asset_id: ASSET });
+const actF = await view("get_activity", { asset_id: ASSET_ID });
 assertTrue(actF.work_points.every(([, p]) => p.current === 0), "epoch reset: current work points 0");
 assertTrue(actF.epoch === 1, "epoch advanced to 1");
 

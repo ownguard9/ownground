@@ -1,0 +1,31 @@
+{
+  "network": "testnet",
+  "contract_id": "ownground.testnet",
+  "wasm_bytes": 694791,
+  "top_ups": [
+    {
+      "from": "ownground-funder.testnet",
+      "to": "ownground.testnet",
+      "amount_near": "9.5",
+      "tx": "ARRfvuADwyzWEHV6LxhDsSnGb5TsScy11iuRMjvT3BCT"
+    },
+    {
+      "from": "ownground-funder2.testnet",
+      "to": "ownground.testnet",
+      "amount_near": "9.5",
+      "tx": "E93XmNdtqk1HMeDw71WhCZkoGwzK9UNiVNRr54bxHfia"
+    }
+  ],
+  "deploy_tx": "THVgCzNLZ8qTP6KSLFUfS61Wu6XSaV2FZCbbcTkuvtt",
+  "init_tx": "AWae86cwENFroCpHDPbAvPjJ6xziBgY5ArZ5ceiBaQhP",
+  "deployer_balance_yocto": "28994769749560790600000000",
+  "stats": {
+    "community_count": 0,
+    "campaign_count": 0,
+    "asset_count": 0,
+    "total_treasury": "0",
+    "total_revenue": "0",
+    "total_payouts": "0"
+  },
+  "created_at": "2026-11-09T06:48:27.906Z"
+}
