@@ -5,7 +5,7 @@ window.BRAND_NAME = "OwnGround";
 
 // Contract address. Empty until the contract is deployed to testnet;
 // the pages show a plain "not deployed yet" state until it is set.
-window.CONTRACT_ID = "";
+window.CONTRACT_ID = "ownground.testnet";
 
 // Testnet only. Never point this at mainnet.
 window.NETWORK = "testnet";

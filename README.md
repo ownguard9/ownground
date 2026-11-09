@@ -8,10 +8,28 @@ earns revenue from that asset, and distributes the earnings under an
 approved policy. One Rust contract, one static site, no backend, no
 mainnet parts.
 
-> Status: built locally, not deployed, not submitted. There is no
-> OwnGround wallet or GitHub identity yet; the deployer account, the
-> demo accounts and the repository are handed over after the build.
-> Everything below runs on NEAR testnet only.
+> Status: deployed to NEAR testnet and the live demo passed (2026-11-09):
+> contract `ownground.testnet`, DAO `lagos-energy.testnet`, all 17 demo
+> steps green, `verify.mjs` 30/30 PASS. Not submitted yet. The GitHub
+> identity is ownguard9 and the repo is live at
+> github.com/ownguard9/ownguard. Everything below runs on NEAR testnet only.
+
+## Live deployment (NEAR testnet)
+
+Deployed 2026-11-09; the demo below ran live against these accounts
+(`scripts/demo.mjs`, log `demo-log-live.txt`; verifier log
+`verify-live.txt`, 30/30 PASS).
+
+| What | Account / id |
+|---|---|
+| Contract | `ownground.testnet` |
+| DAO (Sputnik v2, council = the four members, threshold 2) | `lagos-energy.testnet` |
+| Community | `lagos-energy-cooperative` |
+| Campaign | `lagos-energy-cooperative-c0` |
+| Asset (generator) | `lagos-energy-cooperative-a0` |
+| Members | `alice.ownground.testnet`, `bob.ownground.testnet`, `carol.ownground.testnet`, `dave.ownground.testnet` |
+| Seller | `seller.ownground.testnet` |
+| Operations recipient | `ops.ownground.testnet` |
 
 ## How it works
 
@@ -43,8 +61,9 @@ mainnet parts.
 
 ## The demo (Lagos Energy Cooperative)
 
-The full demo is `scripts/demo.mjs` (17 steps; not run live yet, it needs
-the OwnGround wallet). Four members contribute 2.5 NEAR each to a 10 NEAR
+The full demo is `scripts/demo.mjs` (17 steps; run live on testnet
+2026-11-09, all steps passed — log `demo-log-live.txt`). Four members
+contribute 2.5 NEAR each to a 10 NEAR
 generator target. The DAO acquires the generator from a demo seller.
 Alice records 3 NEAR onchain revenue. Bob records 1 NEAR reported revenue,
 attested by Alice. A 2 NEAR expense is rejected onchain. A 0.5 NEAR
@@ -65,7 +84,7 @@ Final numbers, verified in `check-maths-activity.mjs`:
 | Dave | 0.351 |
 | Retained in the treasury | 0.65 |
 | Maintenance | 0.39 |
-| Final treasury | 0.0 exactly |
+| Final treasury | 1.04 (retention 0.65 + maintenance 0.39 remain as reserves) |
 
 The demo proves eight things: a valid expense succeeds; an excessive
 expense fails onchain with the spending-policy reason; unverified revenue
@@ -75,8 +94,9 @@ flow; the policy amendment flow.
 
 ## Judge steps (do X, see Y)
 
-All of these are checkable against the deployed contract once it is live;
-until then they are covered by the unit tests and the maths scripts.
+All of these are checkable against the deployed contract
+(`ownground.testnet`, community `lagos-energy-cooperative`); they are
+also covered by the unit tests and the maths scripts.
 
 | Do | See |
 |---|---|
@@ -91,7 +111,7 @@ until then they are covered by the unit tests and the maths scripts.
 | Dispute bob's entry as carol, DAO upholds | Entry Rejected; bob's points 0; total revenue 3.1 NEAR (bond included) |
 | Propose a spending cap change, wait the timelock, execute | Cap changes from 1 to 2 NEAR; the old cap stayed in force until execution |
 | Execute the distribution | Alice 0.507, bob 0.351, carol 0.351, dave 0.351 NEAR; payouts + retention + maintenance = 2.6 exactly |
-| Run `node scripts/verify.mjs --contract <id> --community lagos-energy-cooperative` | All checks PASS with numbers |
+| Run `node scripts/verify.mjs --contract ownground.testnet --community lagos-energy-cooperative` | All checks PASS with numbers (30/30 live) |
 | Run `node site/classify.test.cjs` | 22 checks PASS; no failure message is ever a bare "transaction failed" |
 
 ## Why a chain is needed
