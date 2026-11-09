@@ -2,6 +2,7 @@
 let assetId = null;
 let asset = null;
 let community = null;
+let currentRevenue = [];
 
 function fmtDate(ns) {
   try { return new Date(Number(BigInt(ns) / 1000000n)).toLocaleString(); } catch (_) { return "unknown"; }
@@ -23,6 +24,7 @@ async function loadAsset() {
     const revenue = await view("get_revenue", { asset_id: assetId });
     const expenses = await view("get_expenses", { asset_id: assetId });
     const distributions = await view("get_distributions", { asset_id: assetId });
+    currentRevenue = revenue;
     el("content").style.display = "block";
     renderAsset(asset, community, treasury, revenue, expenses, distributions);
   } catch (e) {
@@ -47,34 +49,52 @@ function renderAsset(a, c, t, revenue, expenses, distributions) {
     '<div class="card"><div class="muted small">' + escapeHtml(k) + '</div><div class="big">' + escapeHtml(v) + "</div></div>").join("");
 
   // "Onchain" means the deposit was confirmed onchain, never that the
-  // asset generated the income. "Verified" is only for attested entries.
+  // asset generated the income. An attested entry is a member-attested
+  // claim: another member bonded it, not proof the revenue happened.
+  // Nothing on this page calls an attested entry "verified".
   const statusLabel = {
     Onchain: "Deposit confirmed",
     Pending: "Reported — not independently verified",
-    Verified: "Verified by attestation",
+    Verified: "Member-attested claim",
     Disputed: "Disputed — points suspended",
     Rejected: "Rejected by DAO vote",
   };
   el("revenueList").innerHTML = revenue.length ? revenue.map((r) => {
+    const entryId = String(Number(r.id));
+    const bond = attestationBondYocto(r.amount);
     let actions = "";
+    let note = "";
     if (r.status === "Pending" && walletAccountId && walletAccountId !== r.recorded_by) {
-      actions += ' <button onclick="attestRevenue(' + r.id + ')">Attest (0.1 NEAR bond)</button>';
+      actions += ' <button data-action="attest" data-entry-id="' + entryId + '">Attest (' + fmtYocto(bond) + ' NEAR bond)</button>';
+      note = "<p class=\"small muted\">Attesting this " + fmtYocto(r.amount) + " NEAR claim requires a " + fmtYocto(bond) +
+        " NEAR bond (0.1 NEAR + 10% of the claim) plus 0.01 NEAR storage.</p>";
     }
     if (r.status === "Verified" && walletAccountId && walletAccountId !== r.recorded_by && walletAccountId !== r.attestor) {
-      actions += ' <button onclick="disputeRevenue(' + r.id + ')">Dispute</button>';
+      actions += ' <button data-action="dispute" data-entry-id="' + entryId + '">Dispute</button>';
+      note = "<p class=\"small muted\">Disputing attaches a 0.05 NEAR bond plus 0.01 NEAR storage.</p>";
     }
     if (r.status === "Verified" && r.bond_status === "Held" && walletAccountId === r.attestor) {
-      actions += ' <button onclick="releaseBond(' + r.id + ')">Release bond</button>';
+      actions += ' <button data-action="release-bond" data-entry-id="' + entryId + '">Release bond</button>';
     }
     if (r.status === "Disputed") {
-      actions += ' <button onclick="resolveDispute(' + r.id + ', true)">Propose uphold dispute (DAO)</button>' +
-        ' <button onclick="resolveDispute(' + r.id + ', false)">Propose reject dispute (DAO)</button>';
+      actions += ' <button data-action="resolve-uphold" data-entry-id="' + entryId + '">Propose uphold dispute (DAO)</button>' +
+        ' <button data-action="resolve-reject" data-entry-id="' + entryId + '">Propose reject dispute (DAO)</button>';
+      const autoNs = disputeAutoResolveNs(r, community ? community.dispute_window_ns : null);
+      if (autoNs !== null) {
+        const autoDate = fmtDate(autoNs);
+        if (BigInt(Date.now()) * 1000000n >= autoNs) {
+          note = "<p class=\"small muted\">This dispute can now be auto-resolved: the resolution deadline passed on " + escapeHtml(autoDate) + ".</p>";
+          actions += ' <button data-action="auto-resolve" data-entry-id="' + entryId + '">Auto-resolve expired dispute</button>';
+        } else {
+          note = "<p class=\"small muted\">This dispute can be auto-resolved after " + escapeHtml(autoDate) + " if the DAO has not resolved it by then.</p>";
+        }
+      }
     }
     return '<div class="panel"><p>' + fmtYocto(r.amount) + " NEAR, " + escapeHtml(r.source) +
       " (" + escapeHtml(statusLabel[r.status] || r.status) + "). Reference " + escapeHtml(r.reference) +
       ", recorded by " + escapeHtml(r.recorded_by) + " on " + fmtDate(r.recorded_at) +
       (r.attestor ? ", attested by " + escapeHtml(r.attestor) : "") +
-      (r.points_awarded ? ", work points " + r.points_awarded : "") + ".</p>" + actions + "</div>";
+      (r.points_awarded ? ", work points " + r.points_awarded : "") + ".</p>" + note + actions + "</div>";
   }).join("") : "<p>No revenue recorded yet.</p>";
 
   el("expenseList").innerHTML = expenses.length ? expenses.map((x) =>
@@ -85,14 +105,19 @@ function renderAsset(a, c, t, revenue, expenses, distributions) {
   el("distributionList").innerHTML = distributions.length ? distributions.map((d) => {
     const own = d.ownership_payouts.map(([a, v]) => escapeHtml(a) + " " + fmtYocto(v) + " NEAR").join(", ");
     const act = d.activity_payouts.map(([a, v]) => escapeHtml(a) + " " + fmtYocto(v) + " NEAR").join(", ");
+    const myPayoutFailed = walletAccountId && (d.unpaid || []).indexOf(walletAccountId) >= 0;
     return '<div class="panel"><p>Distribution ' + d.id + " on " + fmtDate(d.executed_at) + ": " +
       fmtYocto(d.distributed) + " NEAR total, " + fmtYocto(d.member_total) + " NEAR to members, " +
       fmtYocto(d.retention) + " NEAR kept in the treasury, " + fmtYocto(d.maintenance) + " NEAR to maintenance. " +
       "Activity pool " + fmtYocto(d.activity_pool) + " NEAR, ownership pool " + fmtYocto(d.ownership_pool) +
       " NEAR, total work points " + d.total_work_points + ".</p>" +
       "<p class=\"small\">Ownership: " + (own || "none") + "</p>" +
-      "<p class=\"small\">Activity (verified work): " + (act || "none") + "</p>" +
+      "<p class=\"small\">Activity (member-attested work): " + (act || "none") + "</p>" +
       (d.unpaid.length ? "<p class=\"small\">Unpaid (transfer failed, credited back): " + d.unpaid.map(escapeHtml).join(", ") + "</p>" : "") +
+      (myPayoutFailed
+        ? "<p class=\"small\">Your payout from this distribution failed to transfer. Claiming pays the exact original amount to you.</p>" +
+          ' <button data-action="claim-payout" data-distribution-id="' + d.id + '">Claim payout</button>'
+        : "") +
       "</div>";
   }).join("") : "<p>No distributions yet.</p>";
 
@@ -121,6 +146,10 @@ async function recordRevenue() {
   const status = el("revStatus").value;
   if (!source) { pageStatus("Describe the revenue source."); return; }
   if (!ref) { pageStatus("Every revenue entry needs an evidence reference."); return; }
+  const sourceErr = checkFieldLength(source, FIELD_LIMITS.revenueSource, "The revenue source");
+  if (sourceErr) { pageStatus(sourceErr); return; }
+  const refErr = checkFieldLength(ref, FIELD_LIMITS.revenueReference, "The evidence reference");
+  if (refErr) { pageStatus(refErr); return; }
   // The contract derives the status from the deposit: onchain revenue
   // attaches amount plus 0.01 NEAR storage; reported revenue attaches
   // exactly 0.01 NEAR.
@@ -145,6 +174,8 @@ async function payExpense() {
   const desc = el("expDesc").value.trim();
   const cat = el("expCat").value.trim();
   if (!recipient || !desc || !cat) { pageStatus("Fill in the recipient, description and category."); return; }
+  const descErr = checkFieldLength(desc, FIELD_LIMITS.expenseDescription, "The expense description");
+  if (descErr) { pageStatus(descErr); return; }
   try {
     pageStatus("Creating a DAO proposal to pay the expense…");
     const id = await createDaoProposal(
@@ -187,20 +218,49 @@ async function executeDistribution() {
 
 async function attestRevenue(entryId) {
   if (!needWallet()) return;
+  const entry = (currentRevenue || []).find((r) => Number(r.id) === Number(entryId));
+  if (!entry) { pageStatus("Could not find that revenue entry. Reload the page and try again."); return; }
+  const bond = attestationBondYocto(entry.amount);
+  const deposit = attestationDepositYocto(entry.amount);
   try {
-    pageStatus("Attesting the entry…");
+    pageStatus("Attesting this " + fmtYocto(entry.amount) + " NEAR claim requires a " + fmtYocto(bond) +
+      " NEAR bond (0.1 NEAR + 10% of the claim) plus 0.01 NEAR storage. Signing now.");
     await walletCall(contractId(), "attest_revenue", {
-      asset_id: assetId, entry_id: entryId,
-    }, "110000000000000000000000");
+      asset_id: assetId, entry_id: Number(entryId),
+    }, deposit.toString());
   } catch (e) { reportFailure(e); }
 }
 
 async function disputeRevenue(entryId) {
   if (!needWallet()) return;
   try {
-    pageStatus("Disputing the entry…");
+    pageStatus("Disputing attaches a 0.05 NEAR bond plus 0.01 NEAR storage. Signing now.");
     await walletCall(contractId(), "dispute_revenue", {
-      asset_id: assetId, entry_id: entryId,
+      asset_id: assetId, entry_id: Number(entryId),
+    }, DISPUTE_DEPOSIT_YOCTO.toString());
+  } catch (e) { reportFailure(e); }
+}
+
+// Auto-resolve a dispute whose resolution deadline has passed: the
+// contract upholds it (the attestation is overturned) without a DAO vote.
+async function resolveDisputeExpired(entryId) {
+  if (!needWallet()) return;
+  try {
+    pageStatus("Auto-resolving the expired dispute…");
+    await walletCall(contractId(), "resolve_dispute_expired", {
+      asset_id: assetId, entry_id: Number(entryId),
+    }, "0");
+  } catch (e) { reportFailure(e); }
+}
+
+// Claim a payout whose transfer failed: the contract pays the exact
+// original amount to the original recipient (the connected wallet).
+async function claimFailedPayout(distributionId) {
+  if (!needWallet()) return;
+  try {
+    pageStatus("Claiming your failed payout…");
+    await walletCall(contractId(), "claim_failed_payout", {
+      distribution_id: Number(distributionId),
     }, "10000000000000000000000");
   } catch (e) { reportFailure(e); }
 }
@@ -231,5 +291,44 @@ async function showBreakdown() {
       "<p class=\"small muted\">Ownership = ownership pool x allocation / 10000. Activity = activity pool x your work points / total work points.</p>";
   } catch (e) { reportFailure(e); }
 }
+
+// Delegated actions for the revenue and distribution lists. The lists
+// are re-rendered from chain data on every load, so one listener per
+// list (attached once, never re-created) handles every button. Buttons
+// carry data-action and numeric data-entry-id / data-distribution-id:
+// no id is ever interpolated into a JavaScript string.
+(function attachAssetListeners() {
+  const revenueList = el("revenueList");
+  if (revenueList) {
+    revenueList.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-action]");
+      if (!btn) return;
+      const entryId = Number(btn.getAttribute("data-entry-id"));
+      if (Number.isNaN(entryId)) return;
+      const action = btn.getAttribute("data-action");
+      if (action === "attest") attestRevenue(entryId);
+      else if (action === "dispute") disputeRevenue(entryId);
+      else if (action === "release-bond") releaseBond(entryId);
+      else if (action === "resolve-uphold") resolveDispute(entryId, true);
+      else if (action === "resolve-reject") resolveDispute(entryId, false);
+      else if (action === "auto-resolve") resolveDisputeExpired(entryId);
+    });
+  }
+  const distributionList = el("distributionList");
+  if (distributionList) {
+    distributionList.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-action='claim-payout']");
+      if (!btn) return;
+      const distributionId = Number(btn.getAttribute("data-distribution-id"));
+      if (!Number.isNaN(distributionId)) claimFailedPayout(distributionId);
+    });
+  }
+  const bind = (id, fn) => { const b = el(id); if (b) b.addEventListener("click", fn); };
+  bind("connectBtn", toggleWallet);
+  bind("recordRevenueBtn", recordRevenue);
+  bind("payExpenseBtn", payExpense);
+  bind("executeDistributionBtn", executeDistribution);
+  bind("showBreakdownBtn", showBreakdown);
+})();
 
 window.owngroundWalletChanged = loadAsset;

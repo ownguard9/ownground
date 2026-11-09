@@ -1,11 +1,12 @@
-// Logo check: renders the SVG mark to a 64x64 PNG favicon, then serves
-// site/ locally and checks the logo renders in the header on the homepage
-// and the communities page, the favicon links are present, no page errors,
-// and the header does not overflow at phone width (390px). Run from
-// /tmp/og-test/ (puppeteer-core lives there).
+// Logo check: serves site/ locally and checks the logo renders in the
+// header on the homepage and the communities page, the SVG favicon link
+// is present and no PNG favicon link exists (the PNG is a local-only
+// binary the text-only push tool cannot push, so the site must not
+// reference it), no page errors, and the header does not overflow at
+// phone width (390px). Run from /tmp/og-test/ (puppeteer-core lives
+// there).
 import puppeteer from 'puppeteer-core';
 import { spawn } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
 
 const SHELL = '/home/hatch/.cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux64/chrome-headless-shell';
 const SITE = '/home/hatch/workspace/commonhold/site';
@@ -20,17 +21,7 @@ function check(label, ok, extra) {
 
 const browser = await puppeteer.launch({ executablePath: SHELL, args: ['--no-sandbox', '--disable-gpu'] });
 
-// 1. Render the SVG mark to a 64x64 PNG favicon (transparent background).
-const svg = readFileSync(`${SITE}/assets/logo.svg`, 'utf8');
-writeFileSync('/tmp/og-test/favicon-render.html', `<!DOCTYPE html><html><head><style>body{margin:0;background:transparent}img{display:block;width:64px;height:64px}</style></head><body>${svg}</body></html>`);
-const shot = await browser.newPage();
-await shot.goto('file:///tmp/og-test/favicon-render.html', { waitUntil: 'load', timeout: 15000 });
-const png = await shot.screenshot({ clip: { x: 0, y: 0, width: 64, height: 64 }, omitBackground: true });
-writeFileSync(`${SITE}/assets/favicon.png`, png);
-await shot.close();
-console.log('favicon.png written,', png.length, 'bytes');
-
-// 2. Serve the site and check the header on both pages.
+// 1. Serve the site and check the header on both pages.
 const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: SITE, stdio: 'ignore' });
 await new Promise((r) => setTimeout(r, 1500));
 
@@ -76,7 +67,7 @@ async function checkPage(path, label) {
   check(`${label}: logo renders at 28x28`, info.w === 28 && info.h === 28, info.w + 'x' + info.h);
   check(`${label}: wordmark still OwnGround`, info.wordmark === 'OwnGround', info.wordmark);
   check(`${label}: SVG favicon link`, info.svgFav === 'assets/favicon.svg', info.svgFav);
-  check(`${label}: PNG favicon link`, info.pngFav === 'assets/favicon.png', info.pngFav);
+  check(`${label}: no PNG favicon link (unpushable binary)`, info.pngFav === null, info.pngFav);
   return info;
 }
 

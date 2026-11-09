@@ -1,7 +1,21 @@
 // OwnGround integration test: the full Lagos Energy Cooperative demo
 // flow on a near-workspaces local sandbox chain. No real wallet, no
-// testnet, no Sputnik deployment: the contract's DAO check is
-// `caller == dao_id`, so a plain sandbox account plays the DAO.
+// testnet.
+//
+// v4 (finding 2): create_community is ASYNC and verifies the DAO
+// onchain. It calls `dao_id.get_policy()` and only creates the
+// community in the `on_dao_verified` callback when the DAO is a
+// genuine Sputnik DAO whose council equals the members and whose
+// threshold is floor(n/2)+1 (3 of 4 here). The plain sandbox account
+// used as `dao` below is NOT a Sputnik DAO, so verification FAILS:
+// the callback removes the pending record, the community never
+// appears, and this test CANNOT PASS as written. To run it, deploy
+// a real Sputnik DAO (factory or direct v2 WASM) in the sandbox,
+// pass its id as `dao_id`, and poll `get_community` /
+// `is_community_pending` after step 1 until the callback creates
+// the community (a few seconds after the tx). The v4 numbers below
+// (proportional attestation bonds, dispute bond, D = 2.7 NEAR) are
+// already reconciled for that run.
 //
 // The wasm must exist first: run `cargo build --target
 // wasm32-unknown-unknown --release` in contract/ (or `cargo near
@@ -15,9 +29,11 @@
 // it cannot start in a container capped at 4096, which is why this
 // test is #[ignore]d: it cannot run in this VM at all.
 //
-// v3 (distribution-timing guard): the demo mirrors the live v3 run
-// (community lagos-energy-cooperative-4, dave's attested entry pays
-// him 0.507 NEAR against 0.351 for the others). The dispute window
+// v4: the demo mirrors the live v3 run (community
+// lagos-energy-cooperative-4, dave's attested entry pays him 0.5265
+// NEAR against 0.3645 for the others), with v4 bonds: attestation
+// bond 0.1 NEAR + 10% of the claimed amount (0.2 NEAR on a 1 NEAR
+// entry), dispute bond 0.05 NEAR. The dispute window
 // and the amendment timelock are both the 60-second minimum, so the
 // test waits the window out with a sandbox fast-forward (70 blocks)
 // plus a 65-second wall-clock sleep before the bond release and the
@@ -201,11 +217,12 @@ async fn lagos_energy_cooperative_demo() -> anyhow::Result<()> {
     assert_eq!(revenue[1]["status"], "Pending");
     assert_eq!(revenue[1]["points_awarded"], 0);
 
-    // 7. Alice attests bob's entry with a 0.1 NEAR bond (proof 4).
+    // 7. Alice attests bob's entry: v4 bond 0.1 NEAR + 10% of the
+    // 1 NEAR claim = 0.2 NEAR, plus 0.01 NEAR storage (proof 4).
     alice
         .call(cid, "attest_revenue")
         .args_json(json!({ "asset_id": ASSET, "entry_id": 1 }))
-        .deposit(NearToken::from_yoctonear(N / 10 + N / 100))
+        .deposit(NearToken::from_yoctonear(21 * N / 100))
         .gas(GAS)
         .transact()
         .await?
@@ -222,7 +239,7 @@ async fn lagos_energy_cooperative_demo() -> anyhow::Result<()> {
         .args_json(json!({ "community_id": COMMUNITY }))
         .await?
         .json()?;
-    assert_eq!(treasury["total_bonds_held"], y(N / 10));
+    assert_eq!(treasury["total_bonds_held"], y(2 * N / 10));
 
     // 8. A 2 NEAR expense is rejected onchain with the spending-policy
     // reason (proof 2); the treasury is unchanged.
@@ -294,11 +311,12 @@ async fn lagos_energy_cooperative_demo() -> anyhow::Result<()> {
     assert_eq!(policies["amendments"][0]["status"], "Pending");
     assert_eq!(policies["spending"]["max_single_expense"], y(N));
 
-    // 11. Carol disputes bob's attested entry: bob's points suspend.
+    // 11. Carol disputes bob's attested entry (v4 dispute bond
+    // 0.05 NEAR + 0.01 NEAR storage): bob's points suspend.
     carol
         .call(cid, "dispute_revenue")
         .args_json(json!({ "asset_id": ASSET, "entry_id": 1 }))
-        .deposit(STORAGE)
+        .deposit(NearToken::from_yoctonear(6 * N / 100))
         .gas(GAS)
         .transact()
         .await?
@@ -337,11 +355,12 @@ async fn lagos_energy_cooperative_demo() -> anyhow::Result<()> {
         .args_json(json!({ "community_id": COMMUNITY }))
         .await?
         .json()?;
-    assert_eq!(treasury["total_revenue"], y(31 * N / 10));
+    assert_eq!(treasury["total_revenue"], y(32 * N / 10));
     assert_eq!(treasury["total_bonds_held"], "0");
 
     // 13. Dave records 1 NEAR reported revenue; carol attests it with
-    // a 0.1 NEAR bond (the visible reward). Nobody disputes it.
+    // a 0.2 NEAR bond (0.1 + 10% of 1 NEAR, the visible reward).
+    // Nobody disputes it.
     dave.call(cid, "record_revenue")
         .args_json(json!({
             "asset_id": ASSET, "amount": y(N),
@@ -355,7 +374,7 @@ async fn lagos_energy_cooperative_demo() -> anyhow::Result<()> {
     carol
         .call(cid, "attest_revenue")
         .args_json(json!({ "asset_id": ASSET, "entry_id": 2 }))
-        .deposit(NearToken::from_yoctonear(N / 10 + N / 100))
+        .deposit(NearToken::from_yoctonear(21 * N / 100))
         .gas(GAS)
         .transact()
         .await?
@@ -374,7 +393,7 @@ async fn lagos_energy_cooperative_demo() -> anyhow::Result<()> {
         .args_json(json!({ "community_id": COMMUNITY }))
         .await?
         .json()?;
-    assert_eq!(treasury["total_bonds_held"], y(N / 10));
+    assert_eq!(treasury["total_bonds_held"], y(2 * N / 10));
 
     // 14. Wait out the 60-second dispute window (and the 60-second
     // amendment timelock, which started earlier at step 10), then
@@ -419,8 +438,10 @@ async fn lagos_energy_cooperative_demo() -> anyhow::Result<()> {
     assert_eq!(policies["amendments"][0]["status"], "Executed");
 
     // 15. Execute the distribution (proofs 5 and 6): dave takes the
-    // whole 0.156 NEAR activity pool on top of his 0.351 NEAR
-    // ownership share — 0.507 NEAR against 0.351 for the others.
+    // whole 0.162 NEAR activity pool on top of his 0.3645 NEAR
+    // ownership share — 0.5265 NEAR against 0.3645 for the others.
+    // D = 3 NEAR onchain revenue + 0.2 NEAR forfeited bond - 0.5 NEAR
+    // expense = 2.7 NEAR (reported revenue adds points, not money).
     alice
         .call(cid, "execute_distribution")
         .args_json(json!({ "asset_id": ASSET }))
@@ -435,12 +456,12 @@ async fn lagos_energy_cooperative_demo() -> anyhow::Result<()> {
         .await?
         .json()?;
     let d = &dists[0];
-    assert_eq!(d["distributed"], y(26 * N / 10), "D = 2.6 NEAR");
-    assert_eq!(d["member_total"], y(156 * N / 100));
-    assert_eq!(d["retention"], y(65 * N / 100));
-    assert_eq!(d["maintenance"], y(39 * N / 100));
-    assert_eq!(d["activity_pool"], y(156 * N / 1000));
-    assert_eq!(d["ownership_pool"], y(1404 * N / 1000));
+    assert_eq!(d["distributed"], y(27 * N / 10), "D = 2.7 NEAR");
+    assert_eq!(d["member_total"], y(162 * N / 100));
+    assert_eq!(d["retention"], y(675 * N / 1000));
+    assert_eq!(d["maintenance"], y(405 * N / 1000));
+    assert_eq!(d["activity_pool"], y(162 * N / 1000));
+    assert_eq!(d["ownership_pool"], y(1458 * N / 1000));
     let payout = |acct: &str| -> u128 {
         d["payouts"]
             .as_array()
@@ -450,10 +471,10 @@ async fn lagos_energy_cooperative_demo() -> anyhow::Result<()> {
             .map(|p| p[1].as_str().unwrap().parse().unwrap())
             .unwrap_or(0)
     };
-    assert_eq!(payout(alice.id().as_str()), 351 * N / 1000, "alice 0.351");
-    assert_eq!(payout(bob.id().as_str()), 351 * N / 1000, "bob 0.351");
-    assert_eq!(payout(carol.id().as_str()), 351 * N / 1000, "carol 0.351");
-    assert_eq!(payout(dave.id().as_str()), 507 * N / 1000, "dave 0.507");
+    assert_eq!(payout(alice.id().as_str()), 3645 * N / 10000, "alice 0.3645");
+    assert_eq!(payout(bob.id().as_str()), 3645 * N / 10000, "bob 0.3645");
+    assert_eq!(payout(carol.id().as_str()), 3645 * N / 10000, "carol 0.3645");
+    assert_eq!(payout(dave.id().as_str()), 5265 * N / 10000, "dave 0.5265");
     let member_total: u128 = d["member_total"].as_str().unwrap().parse().unwrap();
     let retention: u128 = d["retention"].as_str().unwrap().parse().unwrap();
     let maintenance: u128 = d["maintenance"].as_str().unwrap().parse().unwrap();
@@ -461,14 +482,15 @@ async fn lagos_energy_cooperative_demo() -> anyhow::Result<()> {
     assert_eq!(member_total + retention + maintenance, distributed, "exact sum");
     assert!(d["unpaid"].as_array().unwrap().is_empty());
 
-    // 16. Final state: treasury 1.04 NEAR (retention + maintenance
-    // remain as reserves), epoch advanced, points reset.
+    // 16. Final state: treasury 1.08 NEAR (retention 0.675 +
+    // maintenance 0.405 remain as reserves), epoch advanced, points
+    // reset.
     let treasury: serde_json::Value = worker
         .view(cid, "get_treasury")
         .args_json(json!({ "community_id": COMMUNITY }))
         .await?
         .json()?;
-    assert_eq!(treasury["treasury"], y(104 * N / 100), "final treasury 1.04 NEAR");
+    assert_eq!(treasury["treasury"], y(108 * N / 100), "final treasury 1.08 NEAR");
     assert_eq!(treasury["distributable"], "0");
     assert_eq!(treasury["total_bonds_held"], "0");
     let activity: serde_json::Value = worker

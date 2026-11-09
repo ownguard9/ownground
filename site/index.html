@@ -18,7 +18,7 @@
     <a href="communities.html">Communities</a>
     <a href="create.html">Create community</a>
   </nav>
-  <button id="connectBtn" onclick="toggleWallet()">Connect wallet</button>
+  <button id="connectBtn">Connect wallet</button>
 </header>
 <main>
   <p id="pageStatus"></p>
@@ -43,7 +43,7 @@
     <li><strong>Create a community.</strong> Name it, name its DAO, name its members. Membership is fixed at creation.</li>
     <li><strong>Fund an asset.</strong> Members contribute to a campaign with a target. Nothing is spent before the target is reached.</li>
     <li><strong>Vote to acquire.</strong> The DAO proposes the purchase, names the seller, and votes. The contract pays the seller in the same call.</li>
-    <li><strong>Earn revenue.</strong> Income from the asset is recorded onchain. A deposit is confirmed onchain; only attested entries are called verified, and reported income is labelled as reported, never as verified.</li>
+    <li><strong>Earn revenue.</strong> Income from the asset is recorded onchain. A deposit is confirmed onchain; attested entries are member-attested claims, never proof the revenue happened, and reported income is labelled as reported, never as verified.</li>
     <li><strong>Pay expenses.</strong> Operating costs are paid from the treasury, only with DAO approval, and never from locked campaign funds.</li>
     <li><strong>Approve a policy.</strong> The DAO sets the split: members, treasury retention, maintenance.</li>
     <li><strong>Distribute.</strong> The engine calculates entitlements and pays members real NEAR. The split sums exactly to the distributable amount, every time.</li>
@@ -75,6 +75,7 @@
   real onchain state, never simulated. · <a data-repo target="_blank" rel="noopener">GitHub</a>
 </footer>
 <script>
+document.getElementById("connectBtn").addEventListener("click", toggleWallet);
 initWallet();
 </script>
 </body>

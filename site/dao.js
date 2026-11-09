@@ -205,17 +205,34 @@ async function createDaoProposal(daoId, description, method, args, depositYocto,
 
 // Show the created proposal: its number, a link to the DAO, and what
 // happens next, plus a VoteApprove button for the member who created it.
+// Built with DOM APIs and addEventListener: no inline handler, and the
+// description is set as text, never parsed as HTML.
 function showProposalCreated(daoId, proposalId, description) {
   const box = typeof document !== "undefined" ? document.getElementById("proposalBox") : null;
-  const html =
-    "<p><strong>DAO proposal " + proposalId + " created:</strong> " + escapeHtml(description) + "</p>" +
-    '<p><a href="' + escapeHtml(daoProposalUrl(daoId)) + '" target="_blank" rel="noopener">Open DAO proposal ' +
-    proposalId + " on Nearblocks</a></p>" +
-    "<p class=\"small muted\">DAO council members vote on the proposal, and the DAO executes the approved call. " +
-    "Nothing moves until the vote passes.</p>" +
-    '<button onclick="voteDaoProposal(\'' + escapeHtml(daoId) + "', " + proposalId + ')">Vote approve proposal ' + proposalId + "</button>";
   if (box) {
-    box.innerHTML = html;
+    box.textContent = "";
+    const head = document.createElement("p");
+    const strong = document.createElement("strong");
+    strong.textContent = "DAO proposal " + proposalId + " created:";
+    head.appendChild(strong);
+    head.appendChild(document.createTextNode(" " + description));
+    const linkP = document.createElement("p");
+    const link = document.createElement("a");
+    link.href = daoProposalUrl(daoId);
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.textContent = "Open DAO proposal " + proposalId + " on Nearblocks";
+    linkP.appendChild(link);
+    const note = document.createElement("p");
+    note.className = "small muted";
+    note.textContent = "DAO council members vote on the proposal, and the DAO executes the approved call. Nothing moves until the vote passes.";
+    const voteBtn = document.createElement("button");
+    voteBtn.textContent = "Vote approve proposal " + proposalId;
+    voteBtn.addEventListener("click", () => { voteDaoProposal(daoId, proposalId); });
+    box.appendChild(head);
+    box.appendChild(linkP);
+    box.appendChild(note);
+    box.appendChild(voteBtn);
     box.style.display = "block";
   }
   pageStatus("DAO proposal " + proposalId + " created. Council members vote, then the DAO executes it.");

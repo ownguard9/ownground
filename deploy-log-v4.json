@@ -1,0 +1,45 @@
+{
+  "network": "testnet",
+  "contract_id": "ownground4.testnet",
+  "wasm_bytes": 408774,
+  "top_ups": [
+    {
+      "from": "ownground4-funder.testnet",
+      "to": "ownground4.testnet",
+      "amount_near": "9.5",
+      "tx": "E9QfVekRrF4yLEknX519wa5yeiK4MafStRc5jdPiJ75a"
+    },
+    {
+      "from": "ownground4-funder2.testnet",
+      "to": "ownground4.testnet",
+      "amount_near": "9.5",
+      "tx": "H2ouT1cGhPf27wghUZzEZgtMqQ7pid4XnLK8qRR8tkhT"
+    },
+    {
+      "from": "ownground4-funder3.testnet",
+      "to": "ownground4.testnet",
+      "amount_near": "9.5",
+      "tx": "DsBVULFrmyaeMHcGk3i45tk6f7iTjNWr7JzKB48WgY26"
+    },
+    {
+      "from": "ownground4-funder4.testnet",
+      "to": "ownground4.testnet",
+      "amount_near": "9.5",
+      "tx": "DcdL9rWR3UfEs4rpyqmtQqkQKzKKGZxEAqPfUS5f8jwv"
+    }
+  ],
+  "deploy_tx": "7Epg29vQgHZXTDc35GfLwNGLoUzgAZaSZFm9mK6xZSJD",
+  "init_tx": "7Xku37GMRNLbuEzF3xHLU1tBH1pnXZRrBjNhjXyLJuGU",
+  "deployer_balance_yocto": "38482611812742975600000000",
+  "stats": {
+    "community_count": 0,
+    "campaign_count": 0,
+    "asset_count": 0,
+    "total_treasury": "0",
+    "total_revenue": "0",
+    "total_payouts": "0"
+  },
+  "created_at": "2026-11-09T18:32:09.511Z",
+  "wasm_sha256_hex": "d050536ee83abdb274684015661cdfde76892e565cc0f489e4b5a6735aa66364",
+  "wasm_build": "cargo near build non-reproducible-wasm"
+}

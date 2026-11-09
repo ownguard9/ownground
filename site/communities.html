@@ -18,7 +18,7 @@
     <a href="communities.html">Communities</a>
     <a href="create.html">Create community</a>
   </nav>
-  <button id="connectBtn" onclick="toggleWallet()">Connect wallet</button>
+  <button id="connectBtn">Connect wallet</button>
 </header>
 <main>
   <p id="pageStatus"></p>
@@ -30,7 +30,7 @@
     <p>The contract is not deployed yet. Communities will appear here once it is live on testnet.</p>
   </div>
   <div id="stats" class="grid"></div>
-  <label>Search communities<input id="searchBox" placeholder="Type a community name…" oninput="renderList()"></label>
+  <label>Search communities<input id="searchBox" placeholder="Type a community name…"></label>
   <p class="small muted" id="countLine"></p>
   <div id="list"></div>
 </main>
@@ -70,7 +70,12 @@ function renderList() {
     const dots = c.members.map((m, j) =>
       '<span class="member-dot tone-' + ((i + j) % 4) + '" title="' + escapeHtml(m) + '">' +
       escapeHtml(m.split(".")[0][0].toUpperCase()) + '</span>').join("");
-    html += '<div class="panel"><h3><a href="community.html?id=' + escapeHtml(id) + '" onclick="cacheCommunityRow(\'' + escapeHtml(id) + '\')">' + escapeHtml(c.name) + '</a>' + tag + '</h3>' +
+    // The link href is built with encodeURIComponent, never by pasting
+    // the id into HTML: ids come from the chain and may contain quotes
+    // or markup. The id also rides in a data attribute (escaped for the
+    // attribute context) so the click handler can cache the row; there
+    // is no inline handler anywhere on this page.
+    html += '<div class="panel"><h3><a href="community.html?id=' + encodeURIComponent(id) + '" data-community-id="' + escapeHtml(id) + '">' + escapeHtml(c.name) + '</a>' + tag + '</h3>' +
       '<p class="muted">' + escapeHtml(c.description || "") + '</p>' +
       '<div class="member-dots">' + dots + '<span class="small muted" style="align-self:center">' + c.members.length + ' members</span></div>' +
       (camps.length
@@ -121,6 +126,12 @@ async function load() {
   } catch (e) { pageStatus("Could not load communities: " + String(e.message).slice(0, 200)); }
 }
 window.owngroundWalletChanged = load;
+document.getElementById("connectBtn").addEventListener("click", toggleWallet);
+document.getElementById("searchBox").addEventListener("input", renderList);
+document.getElementById("list").addEventListener("click", (e) => {
+  const a = e.target.closest("a[data-community-id]");
+  if (a) cacheCommunityRow(a.getAttribute("data-community-id"));
+});
 initWallet();
 load();
 </script>

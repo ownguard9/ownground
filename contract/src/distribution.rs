@@ -161,13 +161,31 @@ pub fn distributable(asset: &Asset) -> u128 {
         .saturating_sub(asset.distributed_total)
 }
 
+/// A per-recipient claimable payout liability (v4, finding 6): when a
+/// member payout transfer fails, the exact original amount is recorded
+/// here — distribution id, asset, recipient, amount — instead of
+/// reopening the amount into a later distribution. The distribution
+/// record's totals stay intact (the failed amount is never
+/// recomputed under a new epoch's work points), and the recipient
+/// collects exactly this amount via claim_failed_payout. Keyed by
+/// recipient on the contract so get_claimable_payouts can list one
+/// account's claims directly.
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ClaimablePayout {
+    pub distribution_id: u64,
+    pub asset_id: String,
+    pub recipient: AccountId,
+    pub amount: u128,
+}
+
 /// A distribution record: the amount actually distributed (D_effective)
 /// and the exact split, with ownership and activity payouts stored
 /// separately. Stored per asset under a globally unique id; a second
 /// execution with no new revenue computes D = 0 and is rejected, which
-/// is the one-shot guard. `unpaid` lists members whose transfer failed
-/// (reconciled by the payout callback); their amounts are credited back
-/// to the undistributed pool so a later distribution can include them.
+/// is the one-shot guard. `unpaid` lists members whose transfer failed;
+/// their exact amounts are held as claimable liabilities (see
+/// ClaimablePayout) and are NOT credited back to the undistributed
+/// pool: a later distribution never recomputes them.
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
 pub struct DistributionRecord {
     pub id: u64,
@@ -278,6 +296,10 @@ mod tests {
             epoch: 0,
             bond_attestor: None,
             bond_status: None,
+            bond_amount: 0,
+            disputed_at: None,
+            dispute_bond_disputer: None,
+            dispute_bond_status: None,
         });
         asset.expenses.push(crate::revenue::ExpenseEntry {
             amount: 1,
@@ -304,6 +326,10 @@ mod tests {
             epoch: 0,
             bond_attestor: None,
             bond_status: None,
+            bond_amount: 0,
+            disputed_at: None,
+            dispute_bond_disputer: None,
+            dispute_bond_status: None,
         });
         assert_eq!(distributable(&asset), 0);
         asset.revenue.push(crate::revenue::RevenueEntry {
@@ -319,6 +345,10 @@ mod tests {
             epoch: 0,
             bond_attestor: Some(acc("b.testnet")),
             bond_status: Some(crate::revenue::BondStatus::Held),
+            bond_amount: 0,
+            disputed_at: None,
+            dispute_bond_disputer: None,
+            dispute_bond_status: None,
         });
         assert_eq!(distributable(&asset), 0);
     }
@@ -359,6 +389,10 @@ mod tests {
             epoch: 0,
             bond_attestor: None,
             bond_status: None,
+            bond_amount: 0,
+            disputed_at: None,
+            dispute_bond_disputer: None,
+            dispute_bond_status: None,
         });
         asset.expenses.push(crate::revenue::ExpenseEntry {
             amount: 5,

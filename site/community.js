@@ -244,8 +244,8 @@ function renderPolicies(c, policies) {
   const q = document.createElement("p");
   q.className = "small muted policy-note";
   q.textContent = "Activity policy: " + ap.capital_per_near + " capital points per whole NEAR, " +
-    ap.work_per_revenue_record + " work points per verified revenue entry, " +
-    ap.work_per_revenue_near + " work points per whole NEAR of verified revenue. Dispute window " +
+    ap.work_per_revenue_record + " work points per member-attested revenue entry, " +
+    ap.work_per_revenue_near + " work points per whole NEAR of member-attested revenue. Dispute window " +
     Math.round(c.dispute_window_ns / 86400000000000) + " days, amendment timelock " +
     Math.round(c.timelock_ns / 86400000000000) + " days.";
   el("curPolicy").parentElement.appendChild(q);
@@ -254,8 +254,8 @@ function renderPolicies(c, policies) {
     return '<div class="panel"><p>Amendment ' + a.id + ": " + escapeHtml(a.policy_type) + " is " + escapeHtml(a.status) +
       ". Executable after " + when + ".</p>" +
       (a.status === "Pending"
-        ? '<button onclick="executeAmendment(' + a.id + ')">Execute amendment</button> ' +
-          '<button onclick="cancelAmendment(' + a.id + ')">Cancel amendment (DAO)</button>'
+        ? '<button data-action="execute-amendment" data-amendment-id="' + a.id + '">Execute amendment</button> ' +
+          '<button data-action="cancel-amendment" data-amendment-id="' + a.id + '">Cancel amendment (DAO)</button>'
         : "") + "</div>";
   }).join("") : "<p>No amendments yet.</p>";
 }
@@ -402,12 +402,12 @@ function renderCommunity(c, t, policies, campaigns, assets, distributions) {
     // The contract rejects refunds unless the campaign is Open, so the
     // button is only rendered while it is Open.
     const refundBtn = camp.status === "Open"
-      ? ' <button onclick="refund(\'' + escapeHtml(camp.id) + '\')">Refund my contribution</button>'
+      ? ' <button data-action="refund" data-campaign-id="' + escapeHtml(camp.id) + '">Refund my contribution</button>'
       : "";
     // The contract only cancels Open or Funded campaigns, and only the
     // DAO may cancel, so this creates a DAO proposal.
     const cancelBtn = (camp.status === "Open" || camp.status === "Funded")
-      ? ' <button onclick="cancelCampaign(\'' + escapeHtml(camp.id) + '\')">Cancel campaign (DAO)</button>'
+      ? ' <button data-action="cancel-campaign" data-campaign-id="' + escapeHtml(camp.id) + '">Cancel campaign (DAO)</button>'
       : "";
     // The contract only acquires Funded campaigns. The allocation editor
     // is prefilled pro-rata by each contributor's share of the raised
@@ -419,21 +419,21 @@ function renderCommunity(c, t, policies, campaigns, assets, distributions) {
       const rows = alloc.map(([account, bp], i) =>
         '<label>' + escapeHtml(account) + ' share in basis points (10000 = 100%)' +
         '<input id="alloc-' + escapeHtml(camp.id) + "-" + i + '" data-account="' + escapeHtml(account) +
-        '" value="' + bp + '" inputmode="numeric" oninput="updateAllocSum(\'' + escapeHtml(camp.id) + '\')"></label>'
+        '" data-alloc="1" data-campaign-id="' + escapeHtml(camp.id) + '" value="' + bp + '" inputmode="numeric"></label>'
       ).join("");
       acquireBox = '<div class="panel"><h3>Acquire this asset</h3>' +
         '<p class="small muted">Only the DAO can acquire the asset. This creates a DAO proposal; council members vote, then the DAO executes it. Ownership shares must sum to exactly 10000 basis points.</p>' +
         '<label>Seller account id<input id="seller-' + escapeHtml(camp.id) + '" placeholder="seller.testnet"></label>' +
         rows +
         '<p class="small">Allocation total: <span id="allocSum-' + escapeHtml(camp.id) + '">10000</span> of 10000 basis points</p>' +
-        '<button onclick="acquireAsset(\'' + escapeHtml(camp.id) + '\')">Propose acquisition (DAO)</button>' +
+        '<button data-action="acquire" data-campaign-id="' + escapeHtml(camp.id) + '">Propose acquisition (DAO)</button>' +
         '<p id="acquireStatus-' + escapeHtml(camp.id) + '" class="status"></p></div>';
     }
     return '<div class="panel"><h3>' + escapeHtml(camp.asset_name) + '</h3>' +
       "<p>Target " + fmtYocto(camp.target) + " NEAR, raised " + fmtYocto(camp.raised) + " NEAR. Status " + escapeHtml(camp.status) + ". Deadline " + fmtDate(camp.deadline) + ".</p>" +
       "<p class=\"small muted\">You contributed " + (mine ? fmtYocto(mine[1]) + " NEAR" : "nothing yet") + ".</p>" +
       '<label>Amount in NEAR<input id="amt-' + escapeHtml(camp.id) + '" placeholder="2.5"></label>' +
-      '<button onclick="contribute(\'' + escapeHtml(camp.id) + '\')">Contribute</button>' + refundBtn + cancelBtn +
+      '<button data-action="contribute" data-campaign-id="' + escapeHtml(camp.id) + '">Contribute</button>' + refundBtn + cancelBtn +
       '<p id="campStatus-' + escapeHtml(camp.id) + '" class="status"></p></div>' + acquireBox;
   }).join("") : "<p>No campaigns yet.</p>";
 
@@ -453,6 +453,8 @@ async function createCampaign() {
   const target = el("campTarget").value.trim();
   const date = el("campDeadline").value;
   if (!name || !cat || !target || !date) { campaignStatus("Fill in the asset name, category, target and deadline."); return; }
+  const nameErr = checkFieldLength(name, FIELD_LIMITS.assetName, "The asset name");
+  if (nameErr) { campaignStatus(nameErr); return; }
   let targetYocto, deadlineNs;
   try { targetYocto = nearToYocto(target); } catch (e) { campaignStatus(e.message); return; }
   deadlineNs = BigInt(Date.parse(date + "T00:00:00Z")) * 1000000n;
@@ -525,9 +527,11 @@ async function refund(campaignId) {
 }
 
 // Live total for the allocation editor: the proposal is blocked unless
-// the shares sum to exactly 10000 basis points.
+// the shares sum to exactly 10000 basis points. The campaign id is
+// escaped for the selector: ids come from the chain and may contain
+// characters that are special in CSS.
 function updateAllocSum(campaignId) {
-  const inputs = document.querySelectorAll('input[id^="alloc-' + campaignId + '-"]');
+  const inputs = document.querySelectorAll('input[id^="alloc-' + CSS.escape(campaignId) + '-"]');
   let sum = 0;
   inputs.forEach((n) => { const v = Number(n.value); if (Number.isInteger(v)) sum += v; });
   const span = el("allocSum-" + campaignId);
@@ -535,7 +539,7 @@ function updateAllocSum(campaignId) {
 }
 
 function readAllocations(campaignId) {
-  const inputs = document.querySelectorAll('input[id^="alloc-' + campaignId + '-"]');
+  const inputs = document.querySelectorAll('input[id^="alloc-' + CSS.escape(campaignId) + '-"]');
   const out = [];
   inputs.forEach((n) => out.push([n.getAttribute("data-account"), Number(n.value)]));
   return out;
@@ -721,7 +725,7 @@ function renderDaoProposals(policy, proposals) {
         const mine = (p.votes || {})[walletAccountId];
         action = mine === "Approve"
           ? '<p class="small muted">You already voted approve on this proposal.</p>'
-          : '<button onclick="voteDaoProposalFromList(' + id + ')">Vote approve proposal ' + id + "</button>";
+          : '<button data-action="vote-dao" data-proposal-id="' + id + '">Vote approve proposal ' + id + "</button>";
       } else {
         action = '<p class="small muted">Only DAO council members can vote. Switch to a council member\'s wallet to vote.</p>';
       }
@@ -746,5 +750,59 @@ async function voteDaoProposalFromList(proposalId) {
     progressMsg: "Voting approve on DAO proposal " + proposalId + "…",
   });
 }
+
+// Delegated actions. The campaign, amendment and DAO-proposal lists
+// are re-rendered from chain data on every load, so one listener per
+// list (attached once, never re-created) handles every button. Buttons
+// carry data-action plus a data-campaign-id / data-amendment-id /
+// data-proposal-id attribute: no id is ever interpolated into a
+// JavaScript string. Static buttons get their own listeners below.
+(function attachCommunityListeners() {
+  const campaignsEl = el("campaigns");
+  if (campaignsEl) {
+    campaignsEl.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-action]");
+      if (!btn) return;
+      const campaignId = btn.getAttribute("data-campaign-id");
+      if (!campaignId) return;
+      const action = btn.getAttribute("data-action");
+      if (action === "contribute") contribute(campaignId);
+      else if (action === "refund") refund(campaignId);
+      else if (action === "cancel-campaign") cancelCampaign(campaignId);
+      else if (action === "acquire") acquireAsset(campaignId);
+    });
+    campaignsEl.addEventListener("input", (e) => {
+      const inp = e.target.closest("input[data-alloc]");
+      if (!inp) return;
+      updateAllocSum(inp.getAttribute("data-campaign-id"));
+    });
+  }
+  const amendmentsEl = el("amendments");
+  if (amendmentsEl) {
+    amendmentsEl.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-action]");
+      if (!btn) return;
+      const id = Number(btn.getAttribute("data-amendment-id"));
+      if (Number.isNaN(id)) return;
+      const action = btn.getAttribute("data-action");
+      if (action === "execute-amendment") executeAmendment(id);
+      else if (action === "cancel-amendment") cancelAmendment(id);
+    });
+  }
+  const daoEl = el("daoProposals");
+  if (daoEl) {
+    daoEl.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-action='vote-dao']");
+      if (!btn) return;
+      const id = Number(btn.getAttribute("data-proposal-id"));
+      if (!Number.isNaN(id)) voteDaoProposalFromList(id);
+    });
+  }
+  const bind = (id, fn) => { const b = el(id); if (b) b.addEventListener("click", fn); };
+  bind("connectBtn", toggleWallet);
+  bind("createCampaignBtn", createCampaign);
+  bind("proposePolicyBtn", proposePolicy);
+  bind("proposeSpendingPolicyBtn", proposeSpendingPolicy);
+})();
 
 window.owngroundWalletChanged = loadCommunity;

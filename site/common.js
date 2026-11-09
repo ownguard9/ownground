@@ -6,7 +6,59 @@ const RPC_TIMEOUT_MS = 10000;
 
 function el(id) { return document.getElementById(id); }
 function escapeHtml(s) {
-  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+// ---- OwnGround v4 shared rules (mirror the contract; the contract is
+// the authority and rejects anything the site lets through) ----
+// DAO threshold: strict majority of the council, floor(n/2)+1.
+function daoThreshold(n) {
+  return Math.floor(Number(n) / 2) + 1;
+}
+// Community id allowlist: lowercase letters, digits, hyphens only,
+// 1-64 chars, starting and ending with a letter or digit.
+function validateCommunityId(id) {
+  const s = String(id || "");
+  if (!s) return "The community id is empty. The community name must contain at least one letter or digit.";
+  if (s.length > 64) return "The community id must be 64 characters or fewer.";
+  if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(s)) {
+    return "The community id can only use lowercase letters, digits and hyphens, and must start and end with a letter or digit.";
+  }
+  return "";
+}
+// Field length limits, same as the contract (finding 7).
+const FIELD_LIMITS = {
+  communityName: 64,
+  communityDescription: 256,
+  assetName: 64,
+  revenueSource: 64,
+  revenueReference: 128,
+  expenseDescription: 256,
+};
+function checkFieldLength(value, max, label) {
+  if (String(value).length > max) return label + " must be " + max + " characters or fewer.";
+  return "";
+}
+// Attestation bond (v4): 0.1 NEAR + 10% of the claimed amount, plus
+// 0.01 NEAR storage on top when the call is made. All yoctoNEAR BigInt.
+const ATTESTATION_BASE_BOND_YOCTO = 100000000000000000000000n; // 0.1 NEAR
+const STORAGE_RECORD_YOCTO = 10000000000000000000000n; // 0.01 NEAR
+const DISPUTE_BOND_YOCTO = 50000000000000000000000n; // 0.05 NEAR
+const DISPUTE_DEPOSIT_YOCTO = 60000000000000000000000n; // 0.05 NEAR bond + 0.01 NEAR storage
+function attestationBondYocto(amountYocto) {
+  return ATTESTATION_BASE_BOND_YOCTO + BigInt(amountYocto) / 10n;
+}
+function attestationDepositYocto(amountYocto) {
+  return attestationBondYocto(amountYocto) + STORAGE_RECORD_YOCTO;
+}
+// When a Disputed entry can be auto-resolved: disputed_at (v4) plus the
+// community dispute window; falls back to verified_at, the v3 field the
+// dispute window ran from, for entries recorded before disputed_at
+// existed. Returns a BigInt nanosecond timestamp, or null when neither
+// timestamp is present.
+function disputeAutoResolveNs(entry, disputeWindowNs) {
+  const base = entry && (entry.disputed_at != null ? entry.disputed_at : entry.verified_at);
+  if (base == null || disputeWindowNs == null) return null;
+  try { return BigInt(base) + BigInt(disputeWindowNs); } catch (_) { return null; }
 }
 function fmtYocto(yocto) {
   const y = BigInt(yocto);

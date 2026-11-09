@@ -18,7 +18,7 @@
     <a href="communities.html">Communities</a>
     <a href="create.html">Create community</a>
   </nav>
-  <button id="connectBtn" onclick="toggleWallet()">Connect wallet</button>
+  <button id="connectBtn">Connect wallet</button>
 </header>
 <main>
   <h1>Create a community</h1>
@@ -40,21 +40,21 @@
       <p class="small">We set up a shared account for the community as part of creating it. It holds the community funds, and the members below approve spending together.</p>
       <label>Shared account name<input id="cDaoName" placeholder="lagos-energy"></label>
       <p class="small muted" id="daoIdPreview"></p>
-      <p class="small">Setting this up attaches 10 NEAR to the new shared account. That NEAR stays in the account for its own storage. It is not a fee. The members listed below approve spending together, and 2 of them must approve for a proposal to pass.</p>
+      <p class="small">Setting this up attaches 10 NEAR to the new shared account. That NEAR stays in the account for its own storage. It is not a fee. The members listed below approve spending together, <span class="threshold-note"></span></p>
     </div>
     <div id="daoAutoPanel" style="display:none">
       <p class="small">We set up a shared account for the community as part of creating it. It holds the community funds, and the members below approve spending together.</p>
       <p class="small muted" id="daoAutoPreview"></p>
-      <p class="small">Setting this up attaches 10 NEAR to the new shared account. That NEAR stays in the account for its own storage. It is not a fee. The members listed below approve spending together, and 2 of them must approve for a proposal to pass.</p>
+      <p class="small">Setting this up attaches 10 NEAR to the new shared account. That NEAR stays in the account for its own storage. It is not a fee. The members listed below approve spending together, <span class="threshold-note"></span></p>
     </div>
-    <p><a href="#" id="useExistingDaoLink" onclick="showExistingDao(event)">Already have a DAO? Use it instead</a></p>
+    <p><a href="#" id="useExistingDaoLink">Already have a DAO? Use it instead</a></p>
     <div id="daoExistingPanel" style="display:none">
       <label>DAO account<input id="cDao" placeholder="lagos-energy.sputnikv2.testnet"></label>
-      <p><a href="#" id="useNewDaoLink" onclick="showNewDao(event)">Create a new shared account instead</a></p>
+      <p><a href="#" id="useNewDaoLink">Create a new shared account instead</a></p>
     </div>
     <label>Members, one NEAR account per line<textarea id="cMembers" rows="4" placeholder="alice.testnet&#10;bob.testnet"></textarea></label>
     <p id="memberWarning" class="status" style="display:none"></p>
-    <button type="button" id="addMeBtn" class="secondary" style="display:none" onclick="addMeAsMember()">Add me to the members</button>
+    <button type="button" id="addMeBtn" class="secondary" style="display:none">Add me to the members</button>
     <h3>Founding distribution policy</h3>
     <label>Members percent<input id="cPolMembers" value="60"></label>
     <label>Treasury retention percent<input id="cPolTreasury" value="25"></label>
@@ -66,18 +66,18 @@
     <label>Allowed categories, comma separated<input id="cSpCats" value="maintenance, operations"></label>
     <h3>Founding activity policy</h3>
     <label>Capital points per whole NEAR contributed<input id="cActCapital" value="1"></label>
-    <label>Work points per verified revenue entry<input id="cActRecord" value="1"></label>
-    <label>Work points per whole NEAR of verified revenue<input id="cActNear" value="1"></label>
-    <button id="createBtn" onclick="createCommunity()">Create community</button>
+    <label>Work points per member-attested revenue entry<input id="cActRecord" value="1"></label>
+    <label>Work points per whole NEAR of member-attested revenue<input id="cActNear" value="1"></label>
+    <button id="createBtn">Create community</button>
     <p id="pageStatus"></p>
-    <p class="small muted">The community id is made from the name. Connect a wallet first.</p>
+    <p class="small muted">The community id is made from the name: lowercase letters, digits and hyphens only, up to 64 characters. Connect a wallet first.</p>
   </div>
   <p><a class="btn secondary" href="communities.html">Back to live communities</a></p>
 </main>
 <footer><span data-brand>OwnGround</span> runs on NEAR testnet. · <a data-repo target="_blank" rel="noopener">GitHub</a></footer>
 <script>
 function slugify(name) {
-  return String(name || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
+  return String(name || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
 }
 // UTF-8 safe base64 (btoa alone fails on non-ASCII text, e.g. in a
 // description). Same approach as the FairShare site's b64Utf8.
@@ -194,10 +194,10 @@ async function waitForDao(daoId, timeoutMs) {
   }
   throw new Error("The shared account " + daoId + " is not answering yet. Wait a moment and tap Create community again.");
 }
-// The DAO's own init args: council is the community members, and an
-// absolute weight of 2 must approve a proposal. This is the same policy
-// the demo DAOs use, not the factory default ratio, which would need
-// 3 of 4.
+// The DAO's own init args: council is the community members, and the
+// threshold is a strict majority of the council, floor(n/2)+1. A fixed
+// threshold of 2 would leave a 1 member DAO unable to pass anything
+// and a 20 member DAO passable by 10% of its members.
 function daoInitArgs(daoName, purpose, members) {
   return {
     config: { name: daoName, purpose: purpose || daoName, metadata: "" },
@@ -206,13 +206,23 @@ function daoInitArgs(daoName, purpose, members) {
         { name: "all", kind: "Everyone", permissions: ["*:AddProposal"], vote_policy: {} },
         { name: "council", kind: { Group: members }, permissions: ["*:*"], vote_policy: {} },
       ],
-      default_vote_policy: { weight_kind: "RoleWeight", quorum: "0", threshold: "2" },
+      default_vote_policy: { weight_kind: "RoleWeight", quorum: "0", threshold: String(daoThreshold(members.length)) },
       proposal_bond: "1000000000000000000000000",
       proposal_period: "604800000000000",
       bounty_bond: "1000000000000000000000000",
       bounty_forgiveness_period: "86400000000000",
     },
   };
+}
+// The creation preview shows the exact threshold for the current member
+// count, in both DAO panels. Below 3 members there is no threshold to
+// show: the form rejects fewer than 3 before signing.
+function updateThresholdPreview() {
+  const n = memberList().length;
+  const text = n < 3
+    ? "Add at least 3 members (maximum 20) to see the approval threshold."
+    : "and " + daoThreshold(n) + " of " + n + " council members must approve for a proposal to pass.";
+  document.querySelectorAll(".threshold-note").forEach((s) => { s.textContent = text; });
 }
 function readFormFields() {
   return {
@@ -233,7 +243,16 @@ function readFormFields() {
 }
 function validateFormFields(f) {
   if (!f.name) return "A community name is required.";
-  if (f.members.length === 0) return "At least one member is required.";
+  const nameErr = checkFieldLength(f.name, FIELD_LIMITS.communityName, "The community name");
+  if (nameErr) return nameErr;
+  const descErr = checkFieldLength(f.description, FIELD_LIMITS.communityDescription, "The description");
+  if (descErr) return descErr;
+  // The id is made from the name and must satisfy the same allowlist
+  // the contract enforces, so a bad id is rejected before signing.
+  const idErr = validateCommunityId(slugify(f.name));
+  if (idErr) return idErr;
+  if (f.members.length < 3) return "A community needs at least 3 members (maximum 20). Add more members before creating it.";
+  if (f.members.length > 20) return "A community can have at most 20 members. Remove some members before creating it.";
   const m = f.polMembers, t = f.polTreasury, mn = f.polMaint, a = f.polActivity;
   if ([m, t, mn, a].some((x) => Number.isNaN(x) || x < 0 || x > 100) || m + t + mn !== 100) {
     return "Members, retention and maintenance must be percents that sum to 100.";
@@ -498,6 +517,12 @@ async function resumePending() {
     return;
   }
   // Community step confirmed: take the user to the new community page.
+  // create_community is async in v4: the contract verifies the DAO
+  // onchain in a callback a few seconds after the transaction, so the
+  // community may not exist yet even though the receipt confirmed.
+  // Wait for it, and if it never appears, say so plainly instead of
+  // claiming success: the contract may have rejected the creation, for
+  // example because the DAO was invalid.
   const communityId = slugify(pending.fields.name);
   const found = await waitForCommunity(communityId);
   clearPending();
@@ -507,9 +532,9 @@ async function resumePending() {
   }
   const s = el("pageStatus");
   if (s) {
-    s.innerHTML = "Community created. Open it here: <a href=\"" + escapeHtml(communityUrl(communityId)) + "\">" + escapeHtml(communityId) + "</a>.";
+    s.innerHTML = "The transaction confirmed, but the community was not found afterwards. The contract may have rejected the creation (for example, an invalid DAO). Open it here if it appears: <a href=\"" + escapeHtml(communityUrl(communityId)) + "\">" + escapeHtml(communityId) + "</a> or <a href=\"communities.html\">the live communities list</a>.";
   } else {
-    pageStatus("Community created. Open the live communities list to see it.");
+    pageStatus("The transaction confirmed, but the community was not found afterwards. The contract may have rejected the creation (for example, an invalid DAO). Check the live communities list.");
   }
 }
 // The wallet opens in a new tab, so the user can come back to this tab
@@ -530,7 +555,9 @@ async function recheckPendingOnReturn() {
   recheckRunning = true;
   try {
     const communityId = slugify(pending.fields.name);
-    const found = await waitForCommunity(communityId, 15000);
+    // The v4 creation callback lands a few seconds after the
+    // transaction, so poll long enough for the async registration.
+    const found = await waitForCommunity(communityId, 30000);
     if (found) {
       clearPending();
       window.location.href = communityUrl(communityId);
@@ -549,9 +576,15 @@ el("cName").addEventListener("input", () => {
   updateDaoPreview();
 });
 el("cDaoName").addEventListener("input", () => { daoNameEdited = true; updateDaoPreview(); });
-el("cMembers").addEventListener("input", checkMemberWarning);
+el("cMembers").addEventListener("input", () => { checkMemberWarning(); updateThresholdPreview(); });
+el("connectBtn").addEventListener("click", toggleWallet);
+el("useExistingDaoLink").addEventListener("click", (e) => showExistingDao(e));
+el("useNewDaoLink").addEventListener("click", (e) => showNewDao(e));
+el("addMeBtn").addEventListener("click", addMeAsMember);
+el("createBtn").addEventListener("click", createCommunity);
 window.owngroundWalletChanged = function () { checkMemberWarning(); };
 toggleDaoPanels();
+updateThresholdPreview();
 initWallet().then(() => { checkMemberWarning(); resumePending(); });
 </script>
 </body>

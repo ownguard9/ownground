@@ -20,6 +20,12 @@
 //! amount is exactly one of open/funded (locked), acquired, refunded
 //! (paid), or claimable-but-unclaimed (locked)):
 //!   treasury - locked = revenue_onchain - expenses - distributed_payouts
+//!
+//! A failed member payout is counted in total_payouts (and therefore
+//! out of the treasury) at distribution time, so it can never be
+//! spent by the DAO while its recipient's claim is outstanding; the
+//! claim is an exact-amount liability collected via
+//! claim_failed_payout, never recomputed.
 
 use crate::funding::{Campaign, CampaignStatus};
 use crate::registry::Community;
@@ -82,7 +88,11 @@ mod tests {
             "Lagos Energy Cooperative".to_string(),
             "".to_string(),
             "lagos-dao.testnet".parse().unwrap(),
-            vec!["a.testnet".parse::<AccountId>().unwrap()],
+            vec![
+                "a.testnet".parse().unwrap(),
+                "b.testnet".parse().unwrap(),
+                "c.testnet".parse().unwrap(),
+            ],
         )
     }
 

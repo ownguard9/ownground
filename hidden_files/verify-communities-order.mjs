@@ -29,9 +29,9 @@ page.on('pageerror', (e) => { pageErrors++; console.log('PAGE ERROR:', String(e)
 await page.evaluateOnNewDocument(() => {
   const realFetch = window.fetch.bind(window);
   const enc = (v) => Array.from(new TextEncoder().encode(JSON.stringify(v)));
-  const ids = ['lagos-energy-cooperative', 'lagos-energy-cooperative-2', 'lagos-energy-cooperative-3', 'house-cooperative', 'phynic-club', 'oceanic-group'];
+  const ids = ['lagos-energy-cooperative', 'lagos-energy-cooperative-2', 'lagos-energy-cooperative-3', 'house-cooperative', 'phynic-club', 'oceanic-group', 'lagos-energy-cooperative-6'];
   const names = {
-    'lagos-energy-cooperative-3': 'Lagos Energy Cooperative',
+    'lagos-energy-cooperative-6': 'Lagos Energy Cooperative',
     'house-cooperative': 'House cooperative',
     'phynic-club': 'Phynic club',
     'oceanic-group': 'Oceanic group',

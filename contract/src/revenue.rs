@@ -12,10 +12,17 @@
 //!   and never presented as verified income. Earns no points until a
 //!   different member attests it.
 //! * `Verified` — a reported entry attested by a different member, with a
-//!   0.1 NEAR bond held per entry. "Verified" is used ONLY for attested
-//!   entries. Work points are awarded at attestation.
+//!   proportional bond held per entry (0.1 NEAR + 10% of the claimed
+//!   amount, v4 finding 3). "Verified" is used ONLY for attested
+//!   entries. Work points are awarded at attestation, capped at 10
+//!   per entry.
 //! * `Disputed` — a member challenged the verification; the entry's work
-//!   points are suspended while disputed.
+//!   points are suspended while disputed. Disputing attaches a 0.05
+//!   NEAR bond (v4, finding 5): returned if the dispute is upheld,
+//!   forfeited to the treasury as revenue if it is rejected. A dispute
+//!   must resolve by disputed_at + dispute_window_ns; after that
+//!   deadline anyone may auto-resolve it as upheld, so an unresolved
+//!   dispute can never block distributions forever.
 //! * `Rejected` — the DAO upheld a dispute; the verification is overturned,
 //!   the points stay removed, and the attestor's bond goes to the treasury.
 //!
@@ -40,7 +47,8 @@ pub enum RevenueStatus {
     Rejected,
 }
 
-/// State of one attestation bond (always 0.1 NEAR when present).
+/// State of one bond: an attestation bond (proportional, v4) or a
+/// dispute bond (0.05 NEAR, v4).
 #[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[derive(near_sdk::NearSchema)]
 #[abi(json)]
@@ -82,6 +90,20 @@ pub struct RevenueEntry {
     pub bond_attestor: Option<AccountId>,
     /// Bond state, once attested.
     pub bond_status: Option<BondStatus>,
+    /// The attestation bond actually held for this entry, in yoctoNEAR
+    /// (v4, finding 3): 0.1 NEAR + 10% of the claimed amount. 0 until
+    /// attested. Forfeits and releases move exactly this amount.
+    pub bond_amount: u128,
+    /// Block timestamp (ns) when the entry was disputed, once disputed.
+    /// The resolution deadline is disputed_at + dispute_window_ns.
+    pub disputed_at: Option<u64>,
+    /// The member who disputed this entry, once disputed.
+    pub dispute_bond_disputer: Option<AccountId>,
+    /// Dispute-bond state (0.05 NEAR, v4 finding 5), once disputed:
+    /// Held while the dispute is open, Released when the bond is
+    /// returned (dispute upheld), Forfeited when the dispute is
+    /// rejected and the bond goes to the treasury as revenue.
+    pub dispute_bond_status: Option<BondStatus>,
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Clone, Debug)]

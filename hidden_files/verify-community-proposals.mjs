@@ -108,7 +108,7 @@ function installRpcStub() {
       const st = stubState();
       let result;
       let handled = true;
-      if (account === "ownground2.testnet") {
+      if (account === "ownground2.testnet" || account === "ownground3.testnet" || account === "ownground4.testnet") {
         if (method === "get_community") result = st.community;
         else if (method === "get_treasury") result = st.treasury;
         else if (method === "get_policies") result = st.policies;

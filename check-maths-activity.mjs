@@ -86,46 +86,51 @@ const ALLOCS = [["alice", 2500], ["bob", 2500], ["carol", 2500], ["dave", 2500]]
   check('work weight 0 disables record points', workPoints(3n * N, 0n, 1n) === 3n);
 }
 
-// --- demo distribution with the activity slice (final numbers) ---
+// --- demo distribution with the activity slice (final numbers, v4) ---
 // The dispute proof runs BEFORE the distribution and is upheld, so
-// bob's 2 work points are removed and the 0.1 NEAR bond enters the
-// treasury as revenue. total_revenue is 3.1 NEAR, expenses 0.5 NEAR,
-// so D = 2.6 NEAR. Work points at distribution: alice 0 (her 3 NEAR
-// was an onchain deposit, which earns no points), bob 0 — so the
-// activity slice falls back to ownership: activity pool 0, ownership
-// pool 1.56, each of the four equal owners 0.39 NEAR.
+// bob's 2 work points are removed and the 0.2 NEAR bond enters the
+// treasury as revenue (v4 proportional bond: 0.1 + 1/10 of the 1 NEAR
+// claim). total_revenue is 3.2 NEAR, expenses 0.5 NEAR,
+// so D = 2.7 NEAR. Work points at distribution: alice 0 (her 3 NEAR
+// was an onchain deposit, which earns no points), bob 0 (points
+// removed by the upheld dispute), dave 2 (his 1 NEAR reported entry,
+// attested by carol and never disputed). The activity pool is 0.162
+// NEAR, all of it dave's; the ownership pool is 1.458 NEAR, 0.3645
+// each — so dave visibly earns more: 0.5265 NEAR against 0.3645 for
+// the other three.
 {
-  const points = [];
-  const D = 26n * N / 10n; // 2.6 NEAR
+  const points = [["dave", 2n]];
+  const D = 27n * N / 10n; // 2.7 NEAR
   const s = splitActivity(D, POLICY, ALLOCS, points);
   check('demo exact sum', s.total === D, `total=${s.total} D=${D}`);
-  check('demo member total 1.56 exact', s.memberTotal === 156n * N / 100n, `${s.memberTotal}`);
-  check('demo alice 0.39', s.payouts.get("alice") === 390n * N / 1000n, `${s.payouts.get("alice")}`);
-  check('demo bob 0.39', s.payouts.get("bob") === 390n * N / 1000n, `${s.payouts.get("bob")}`);
-  check('demo others 0.39', ["carol", "dave"].every((m) => s.payouts.get(m) === 390n * N / 1000n));
-  check('demo all four equal (fallback to ownership)', ["alice", "bob", "carol", "dave"].every((m) => s.payouts.get(m) === 390n * N / 1000n));
-  check('demo alice ownership 0.39', s.ownershipPayouts.get("alice") === 390n * N / 1000n);
+  check('demo member total 1.62 exact', s.memberTotal === 162n * N / 100n, `${s.memberTotal}`);
+  check('demo alice 0.3645', s.payouts.get("alice") === 3645n * N / 10000n, `${s.payouts.get("alice")}`);
+  check('demo bob 0.3645', s.payouts.get("bob") === 3645n * N / 10000n, `${s.payouts.get("bob")}`);
+  check('demo carol 0.3645', s.payouts.get("carol") === 3645n * N / 10000n, `${s.payouts.get("carol")}`);
+  check('demo dave 0.5265 (reward visible)', s.payouts.get("dave") === 5265n * N / 10000n, `${s.payouts.get("dave")}`);
+  check('demo dave ownership 0.3645', s.ownershipPayouts.get("dave") === 3645n * N / 10000n);
+  check('demo dave activity 0.162 (whole activity pool)', (s.activityPayouts.get("dave") || 0n) === 162n * N / 1000n);
   check('demo alice activity 0 (no verified work stands)', (s.activityPayouts.get("alice") || 0n) === 0n);
   check('demo bob activity 0 (points removed by dispute)', (s.activityPayouts.get("bob") || 0n) === 0n);
-  check('demo retention 0.65 exact', s.retention === 65n * N / 100n, `${s.retention}`);
-  check('demo maintenance 0.39', s.maintenance === 39n * N / 100n);
-  check('demo activity pool 0', s.A === 0n);
-  check('demo ownership pool 1.56', s.O === 156n * N / 100n);
+  check('demo retention 0.675 exact', s.retention === 675n * N / 1000n, `${s.retention}`);
+  check('demo maintenance 0.405', s.maintenance === 405n * N / 1000n);
+  check('demo activity pool 0.162', s.A === 162n * N / 1000n);
+  check('demo ownership pool 1.458', s.O === 1458n * N / 1000n);
 }
 
 // --- dispute flow: treasury equation with the forfeited bond ---
 // Contributions 10, acquire 10, onchain revenue 3, expense 0.5, the
-// upheld dispute adds the 0.1 NEAR bond as revenue, distribution 2.6.
+// upheld dispute adds the 0.2 NEAR bond as revenue, distribution 2.7.
 {
   const contributions = 10n * N;
   const acquisitions = 10n * N;
-  const revenue = 3n * N + N / 10n; // 3 NEAR onchain + 0.1 bond
+  const revenue = 3n * N + 2n * N / 10n; // 3 NEAR onchain + 0.2 bond
   const expenses = 5n * N / 10n;
-  const payouts = 156n * N / 100n; // member pool only; retention 0.65
-  // + maintenance 0.39 stay in the treasury as reserves
+  const payouts = 162n * N / 100n; // member pool only; retention 0.675
+  // + maintenance 0.405 stay in the treasury as reserves
   const treasury = contributions + revenue - acquisitions - expenses - payouts;
-  check('dispute treasury final 1.04 NEAR', treasury === 104n * N / 100n, `${treasury}`);
-  check('dispute D = revenue - expenses = 2.6', revenue - expenses === 26n * N / 10n);
+  check('dispute treasury final 1.08 NEAR', treasury === 108n * N / 100n, `${treasury}`);
+  check('dispute D = revenue - expenses = 2.7', revenue - expenses === 27n * N / 10n);
   // Before the dispute, bob held 2 work points (1 NEAR attested entry)
   // and alice held 0 (her 3 NEAR was an onchain deposit, which earns
   // no points); after the upheld dispute bob's are 0 too and the
