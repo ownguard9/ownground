@@ -36,6 +36,9 @@ header.top {
   z-index: 10;
 }
 header.top .brand { font-size: 20px; font-weight: 700; text-decoration: none; color: var(--text); }
+/* Logo mark beside the wordmark: fixed size, vertically centred. */
+header.top .brand { display: inline-flex; align-items: center; gap: 8px; }
+header.top .brand .brand-mark { width: 28px; height: 28px; flex: none; }
 header.top nav a { margin-left: 16px; color: var(--muted); text-decoration: none; }
 header.top nav a:hover { color: var(--text); }
 main { max-width: 960px; margin: 0 auto; padding: 24px 20px 80px; }
