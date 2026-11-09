@@ -254,8 +254,6 @@ Trezu: Trezu (https://trezu.app) is a Sputnik-DAO-compatible treasury UI, but it
 
 - **Testnet only.** No mainnet parts, no fee logic, no Trezu (see Who
   holds the money above).
-- **Demo accounts only.** The demo members, seller and DAO are test
-  accounts. No real people have used OwnGround.
 - **Deployer key held during the hackathon.** The deployer account is
   held by the builder until handover; there is no owner backdoor in the
   contract, but the deployment itself is not yet decentralised.
