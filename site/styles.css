@@ -182,7 +182,7 @@ th { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spa
 }
 .flow li.done::before { background: var(--accent); color: #06130b; border-color: var(--accent); }
 .flow li.now::before { background: var(--warn); color: #1a1200; border-color: var(--warn); }
-#pageStatus { color: var(--warn); min-height: 1.2em; }
+#pageStatus, .status { color: var(--warn); min-height: 1.2em; }
 footer { border-top: 1px solid var(--line); padding: 18px 20px; color: var(--muted); font-size: 13px; text-align: center; }
 footer a { color: var(--muted); text-decoration: underline; text-underline-offset: 2px; }
 footer a:hover { color: var(--accent2); }

@@ -1,0 +1,25 @@
+{
+  "network": "testnet",
+  "dao_id": "vehicle-coop.testnet",
+  "dao_name": "vehicle-coop",
+  "wasm_source_dao": "genesis.sputnikv2.testnet",
+  "wasm_bytes": 469723,
+  "wasm_code_hash": "8RMeZ5cXDap6TENxaJKtigRYf3n139iHmTRe8ZUNey6N",
+  "wasm_sha256": "6e3f1814d40769d8f57b9a7af689d22aaab96d3232cec4d861311829c1d2318f",
+  "deploy_tx": "6B9z5GwSakHPNAeegLtnTh7VGc6saAhtytijzpjdPLqB",
+  "init_tx": "E7TZSNDfLGcHDZd71RNtmfkKzFnWhE12qpXnTQGuGV4b",
+  "council": [
+    "daniel-vehicles.testnet",
+    "felix-vehicles.testnet",
+    "grace-vehicles.testnet",
+    "peter-vehicles.testnet"
+  ],
+  "vote_threshold": "Weight 2 (2 of 4 council approvals pass a proposal)",
+  "config": {
+    "name": "vehicle-coop",
+    "purpose": "Vehicle Cooperative — neighbours owning vehicles together",
+    "metadata": ""
+  },
+  "dao_balance_yocto": "9996356218288434300000000",
+  "created_at": "2026-11-09T13:14:37.323Z"
+}

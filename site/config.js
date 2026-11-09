@@ -24,6 +24,11 @@ window.STORAGE = {
   createCommunity: "100000000000000000000000", // 0.1 NEAR
   createCampaign: "50000000000000000000000", // 0.05 NEAR
   record: "10000000000000000000000", // 0.01 NEAR
+  // Creating a DAO through the factory attaches 10 NEAR to the new DAO.
+  // The live factory floor is 5.39679 NEAR (its minimum covers the DAO
+  // code storage); 10 NEAR clears it with headroom. The deposit becomes
+  // the new DAO's own balance for its own storage. It is not a fee.
+  createDao: "10000000000000000000000000", // 10 NEAR
 };
 window.GAS_100 = "100000000000000";
 window.GAS_150 = "150000000000000";

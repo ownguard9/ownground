@@ -20,14 +20,24 @@
   <button id="connectBtn" onclick="toggleWallet()">Connect wallet</button>
 </header>
 <main>
-  <p id="pageStatus"></p>
   <h1>Create a community</h1>
-  <p class="lede">First create a Sputnik DAO for the community, then register it here.
-  Membership is fixed at creation and cannot change later. The founding policies below are set at creation; later changes go through a two-step amendment (propose, wait the timelock, execute). Creating a community attaches 0.1 NEAR for storage.</p>
+  <p id="pageStatus"></p>
+  <p class="lede">The site creates a Sputnik DAO for the community, then registers it here. You can also use a DAO you already have.
+  Membership is fixed at creation and cannot change later. The founding policies below are set at creation; later changes go through an amendment (propose, wait the timelock, execute). Creating a community attaches 0.1 NEAR for storage.</p>
   <div class="panel">
     <label>Community name<input id="cName" placeholder="Lagos Energy Cooperative"></label>
     <label>Description<input id="cDesc" placeholder="What the community owns together"></label>
-    <label>DAO account<input id="cDao" placeholder="lagos-energy.sputnikv2.testnet"></label>
+    <h3>DAO for this community</h3>
+    <label><input type="radio" name="daoMode" value="new" checked onchange="toggleDaoPanels()"> Create a new DAO for this community</label>
+    <label><input type="radio" name="daoMode" value="existing" onchange="toggleDaoPanels()"> I already have a DAO</label>
+    <div id="daoNewPanel">
+      <label>DAO name<input id="cDaoName" placeholder="lagos-energy"></label>
+      <p class="small muted" id="daoIdPreview"></p>
+      <p class="small">Creating the DAO attaches 10 NEAR to the new DAO. That NEAR becomes the DAO's own balance for its own storage. It is not a fee. The DAO council is the members listed below, and 2 of them must approve a proposal for it to pass.</p>
+    </div>
+    <div id="daoExistingPanel" style="display:none">
+      <label>DAO account<input id="cDao" placeholder="lagos-energy.sputnikv2.testnet"></label>
+    </div>
     <label>Members, one NEAR account per line<textarea id="cMembers" rows="4" placeholder="alice.testnet&#10;bob.testnet"></textarea></label>
     <h3>Founding distribution policy</h3>
     <label>Members percent<input id="cPolMembers" value="60"></label>
@@ -52,57 +62,366 @@
 function slugify(name) {
   return String(name || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
 }
+// UTF-8 safe base64 (btoa alone fails on non-ASCII text, e.g. in a
+// description). Same approach as the FairShare site's b64Utf8.
+function b64Utf8(s) {
+  const bytes = new TextEncoder().encode(String(s));
+  let bin = "";
+  bytes.forEach((b) => { bin += String.fromCharCode(b); });
+  return btoa(bin);
+}
+
+const DAO_FACTORY_SUFFIX = ".sputnikv2.testnet";
+const PENDING_KEY = "ownground-pending-community";
+let daoNameEdited = false;
+
+function daoMode() {
+  const checked = document.querySelector('input[name="daoMode"]:checked');
+  return checked ? checked.value : "new";
+}
+function toggleDaoPanels() {
+  const mode = daoMode();
+  el("daoNewPanel").style.display = mode === "new" ? "" : "none";
+  el("daoExistingPanel").style.display = mode === "existing" ? "" : "none";
+  updateDaoPreview();
+}
+function daoNameValue() {
+  return el("cDaoName").value.trim().toLowerCase();
+}
+function updateDaoPreview() {
+  const preview = el("daoIdPreview");
+  if (!preview) return;
+  const name = daoNameValue();
+  preview.textContent = name
+    ? "The DAO will be " + name + DAO_FACTORY_SUFFIX + "."
+    : "Pick a DAO name. The DAO will be <name>.sputnikv2.testnet.";
+}
+// A NEAR account name part: 2 to 46 characters, lowercase letters,
+// digits, hyphens and underscores, not starting or ending with a
+// hyphen or underscore.
+function validateDaoName(name) {
+  if (!name) return "Pick a DAO name.";
+  if (name.length < 2) return "The DAO name needs at least 2 characters.";
+  if (name.length > 46) return "The DAO name is too long. Keep it under 46 characters.";
+  if (!/^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$/.test(name)) {
+    return "The DAO name can only use lowercase letters, digits, hyphens and underscores, and cannot start or end with a hyphen or underscore.";
+  }
+  return "";
+}
+// True when the account already exists onchain, false when it does not.
+async function daoAccountExists(daoId) {
+  for (const url of window.RPC_ENDPOINTS) {
+    try {
+      const res = await fetchWithTimeout(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0", id: "exists", method: "query",
+          params: { request_type: "view_account", account_id: daoId, finality: "final" },
+        }),
+      });
+      const data = await res.json();
+      if (!data.error && data.result) return true;
+      if (data.error) {
+        const msg = String((data.error && data.error.message) || "");
+        if (msg.indexOf("doesn't exist") >= 0 || msg.indexOf("does not exist") >= 0) return false;
+      }
+    } catch (_) { /* try the next endpoint */ }
+  }
+  return false;
+}
+// Wait until the DAO answers get_policy, so the community is never
+// registered against a DAO that is not live yet.
+async function waitForDao(daoId, timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < (timeoutMs || 60000)) {
+    try {
+      const policy = await rpcViewCall(daoId, "get_policy", {});
+      if (policy && Array.isArray(policy.roles)) return policy;
+    } catch (_) { /* not live yet */ }
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  throw new Error("The DAO " + daoId + " is not answering yet. Wait a moment and tap Create community again.");
+}
+// The DAO's own init args: council is the community members, and an
+// absolute weight of 2 must approve a proposal. This is the same policy
+// the demo DAOs use, not the factory default ratio, which would need
+// 3 of 4.
+function daoInitArgs(daoName, purpose, members) {
+  return {
+    config: { name: daoName, purpose: purpose || daoName, metadata: "" },
+    policy: {
+      roles: [
+        { name: "all", kind: "Everyone", permissions: ["*:AddProposal"], vote_policy: {} },
+        { name: "council", kind: { Group: members }, permissions: ["*:*"], vote_policy: {} },
+      ],
+      default_vote_policy: { weight_kind: "RoleWeight", quorum: "0", threshold: "2" },
+      proposal_bond: "1000000000000000000000000",
+      proposal_period: "604800000000000",
+      bounty_bond: "1000000000000000000000000",
+      bounty_forgiveness_period: "86400000000000",
+    },
+  };
+}
+function readFormFields() {
+  return {
+    name: el("cName").value.trim(),
+    description: el("cDesc").value.trim(),
+    members: el("cMembers").value.split(/\n+/).map((s) => s.trim()).filter(Boolean),
+    polMembers: Number(el("cPolMembers").value),
+    polTreasury: Number(el("cPolTreasury").value),
+    polMaint: Number(el("cPolMaint").value),
+    polActivity: Number(el("cPolActivity").value),
+    spCap: el("cSpCap").value,
+    spReserve: el("cSpReserve").value,
+    spCats: el("cSpCats").value,
+    actCapital: el("cActCapital").value,
+    actRecord: el("cActRecord").value,
+    actNear: el("cActNear").value,
+  };
+}
+function validateFormFields(f) {
+  if (!f.name) return "A community name is required.";
+  if (f.members.length === 0) return "At least one member is required.";
+  const m = f.polMembers, t = f.polTreasury, mn = f.polMaint, a = f.polActivity;
+  if ([m, t, mn, a].some((x) => Number.isNaN(x) || x < 0 || x > 100) || m + t + mn !== 100) {
+    return "Members, retention and maintenance must be percents that sum to 100.";
+  }
+  const cats = f.spCats.split(",").map((s) => s.trim()).filter(Boolean);
+  if (!cats.length) return "List at least one allowed spending category.";
+  return "";
+}
+function savePending(p) {
+  try { localStorage.setItem(PENDING_KEY, JSON.stringify(p)); } catch (_) { /* storage unavailable */ }
+}
+function loadPending() {
+  try {
+    const raw = localStorage.getItem(PENDING_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (_) { return null; }
+}
+function clearPending() {
+  try { localStorage.removeItem(PENDING_KEY); } catch (_) { /* storage unavailable */ }
+}
+function setBusy(busy, label) {
+  const btn = el("createBtn");
+  btn.disabled = busy;
+  btn.textContent = busy ? label : "Create community";
+}
+// Wait until the community is readable onchain, so a redirect never
+// lands on a page that cannot load it yet.
+async function waitForCommunity(communityId, timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < (timeoutMs || 60000)) {
+    try {
+      const c = await view("get_community", { community_id: communityId });
+      if (c && c.id === communityId) return c;
+    } catch (_) { /* not visible yet */ }
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  return null;
+}
+function communityUrl(communityId) {
+  return "community.html?id=" + encodeURIComponent(communityId);
+}
+async function sendCreateCommunity(f, daoId) {
+  const cats = f.spCats.split(",").map((s) => s.trim()).filter(Boolean);
+  await walletCall(contractId(), "create_community", {
+    id: slugify(f.name),
+    name: f.name,
+    description: f.description,
+    dao_id: daoId,
+    members: f.members,
+    distribution_policy: {
+      members_bp: Math.round(f.polMembers * 100), treasury_bp: Math.round(f.polTreasury * 100),
+      maintenance_bp: Math.round(f.polMaint * 100), activity_bp: Math.round(f.polActivity * 100),
+    },
+    spending_policy: {
+      max_single_expense: nearToYocto(f.spCap).toString(),
+      min_treasury_reserve: nearToYocto(f.spReserve).toString(),
+      allowed_categories: cats,
+    },
+    activity_policy: {
+      capital_per_near: Math.round(Number(f.actCapital)),
+      work_per_revenue_record: Math.round(Number(f.actRecord)),
+      work_per_revenue_near: Math.round(Number(f.actNear)),
+    },
+    dispute_window_ns: null,
+    timelock_ns: null,
+  }, window.STORAGE.createCommunity, window.GAS_100);
+}
 async function createCommunity() {
   if (!walletAccountId) { pageStatus("Connect a wallet first."); return; }
-  const name = el("cName").value.trim();
-  const dao = el("cDao").value.trim();
-  const members = el("cMembers").value.split(/\n+/).map((s) => s.trim()).filter(Boolean);
-  if (!name || !dao || members.length === 0) { pageStatus("Name, DAO account and at least one member are required."); return; }
-  const m = Number(el("cPolMembers").value);
-  const t = Number(el("cPolTreasury").value);
-  const mn = Number(el("cPolMaint").value);
-  const a = Number(el("cPolActivity").value);
-  if ([m, t, mn, a].some((x) => Number.isNaN(x) || x < 0 || x > 100) || m + t + mn !== 100) {
-    pageStatus("Members, retention and maintenance must be percents that sum to 100.");
+  const mode = daoMode();
+  const f = readFormFields();
+  const formError = validateFormFields(f);
+  if (formError) { pageStatus(formError); return; }
+
+  if (mode === "existing") {
+    const dao = el("cDao").value.trim();
+    if (!dao) { pageStatus("Name, DAO account and at least one member are required."); return; }
+    // Remember the creation so the return from the wallet can redirect
+    // to the new community page once the transaction is confirmed.
+    savePending({ step: "community", daoName: "", daoId: dao, fields: f });
+    setBusy(true, "Creating…");
+    try {
+      await sendCreateCommunity(f, dao);
+      pageStatus("Community creation sent. Wait for the wallet to confirm, then open the live communities list.");
+    } catch (e) { reportFailure(e); }
+    setBusy(false);
     return;
   }
-  const cap = nearToYocto(el("cSpCap").value);
-  const reserve = nearToYocto(el("cSpReserve").value);
-  const cats = el("cSpCats").value.split(",").map((s) => s.trim()).filter(Boolean);
-  if (!cats.length) { pageStatus("List at least one allowed spending category."); return; }
-  const btn = el("createBtn");
-  btn.disabled = true;
-  btn.textContent = "Creating…";
+
+  // New DAO path: create the DAO through the factory first, then
+  // register the community against it when the wallet returns.
+  const daoName = daoNameValue();
+  const nameError = validateDaoName(daoName);
+  if (nameError) { pageStatus(nameError); return; }
+  const daoId = daoName + DAO_FACTORY_SUFFIX;
+  const pending = loadPending();
+  setBusy(true, "Checking…");
+  let exists = false;
   try {
-    await walletCall(contractId(), "create_community", {
-      id: slugify(name),
-      name: name,
-      description: el("cDesc").value.trim(),
-      dao_id: dao,
-      members: members,
-      distribution_policy: {
-        members_bp: Math.round(m * 100), treasury_bp: Math.round(t * 100),
-        maintenance_bp: Math.round(mn * 100), activity_bp: Math.round(a * 100),
-      },
-      spending_policy: {
-        max_single_expense: cap.toString(),
-        min_treasury_reserve: reserve.toString(),
-        allowed_categories: cats,
-      },
-      activity_policy: {
-        capital_per_near: Math.round(Number(el("cActCapital").value)),
-        work_per_revenue_record: Math.round(Number(el("cActRecord").value)),
-        work_per_revenue_near: Math.round(Number(el("cActNear").value)),
-      },
-      dispute_window_ns: null,
-      timelock_ns: null,
-    }, window.STORAGE.createCommunity, window.GAS_100);
-    pageStatus("Community creation sent. Wait for the wallet to confirm, then open the live communities list.");
+    exists = await daoAccountExists(daoId);
+  } catch (e) {
+    pageStatus("Could not check whether that DAO name is free. Check your connection and try again.");
+    setBusy(false);
+    return;
+  }
+  if (exists) {
+    if (pending && pending.daoId === daoId) {
+      // This DAO was already created in this flow. Register the
+      // community against it instead of creating a second DAO.
+      setBusy(true, "Registering…");
+      try {
+        await waitForDao(daoId);
+        savePending({ step: "community", daoName: daoName, daoId: daoId, fields: f });
+        await sendCreateCommunity(f, daoId);
+        pageStatus("Community creation sent. Wait for the wallet to confirm, then open the live communities list.");
+      } catch (e) { reportFailure(e); }
+      setBusy(false);
+      return;
+    }
+    pageStatus("That DAO name is taken. Pick another name.");
+    setBusy(false);
+    return;
+  }
+  savePending({ step: "dao", daoName: daoName, daoId: daoId, fields: f });
+  setBusy(true, "Creating DAO…");
+  try {
+    const args = daoInitArgs(daoName, f.description, f.members);
+    await walletCall(window.DAO_FACTORY_ID, "create", {
+      name: daoName,
+      args: b64Utf8(JSON.stringify(args)),
+    }, window.STORAGE.createDao, window.GAS_150);
+    pageStatus("DAO creation sent. The wallet will return here and the community will be registered next.");
   } catch (e) { reportFailure(e); }
-  btn.disabled = false;
-  btn.textContent = "Create community";
+  setBusy(false);
 }
-initWallet();
+// Resume a two step creation after the wallet redirects back.
+// Runs once, after initWallet has handled the returned transaction.
+async function resumePending() {
+  const pending = loadPending();
+  if (!pending) return;
+  const params = new URLSearchParams(window.location.search);
+  const hashes = params.get("transactionHashes");
+  const errorCode = params.get("errorCode");
+  if (errorCode) {
+    if (pending.step === "dao") {
+      clearPending();
+      pageStatus("The DAO creation was not completed (" + errorCode + "). No money moved. Tap Create community to try again.");
+    } else {
+      pageStatus("The community creation was not completed (" + errorCode + "). Your DAO " + pending.daoId + " is ready. Tap Create community to try again.");
+    }
+    return;
+  }
+  if (!hashes) {
+    // Returned without a transaction: check whether the DAO already
+    // exists, so a closed wallet tab does not strand the flow.
+    if (pending.step === "dao") {
+      try {
+        if (await daoAccountExists(pending.daoId)) {
+          savePending({ step: "community", daoName: pending.daoName, daoId: pending.daoId, fields: pending.fields });
+          pageStatus("Your DAO " + pending.daoId + " is ready. Tap Create community to register it.");
+        } else {
+          clearPending();
+          pageStatus("No DAO was created. Tap Create community to try again.");
+        }
+      } catch (_) {
+        pageStatus("Could not check the DAO. Tap Create community to continue.");
+      }
+    } else {
+      pageStatus("Your DAO " + pending.daoId + " is ready. Tap Create community to register it.");
+    }
+    return;
+  }
+  const txHash = hashes.split(",")[0];
+  const account = walletAccountId;
+  let state = "unknown";
+  if (account) {
+    for (let attempt = 0; attempt < 3 && state === "unknown"; attempt++) {
+      state = await checkTxStatus(txHash, account);
+      if (state === "unknown" && attempt < 2) await new Promise((r) => setTimeout(r, 1500));
+    }
+  }
+  if (state === "failed") {
+    if (pending.step === "dao") {
+      clearPending();
+      pageStatus("The DAO creation failed onchain. No money moved. Tap Create community to try again.");
+    } else {
+      pageStatus("The community creation failed onchain. Your DAO " + pending.daoId + " is ready. Tap Create community to try again.");
+    }
+    return;
+  }
+  if (state !== "confirmed") {
+    // The receipt was not visible yet. The transaction may still have
+    // landed, so check whether the community exists before giving up.
+    if (pending.step === "community") {
+      const communityId = slugify(pending.fields.name);
+      const found = await waitForCommunity(communityId, 30000);
+      if (found) {
+        clearPending();
+        window.location.href = communityUrl(communityId);
+        return;
+      }
+    }
+    pageStatus("The transaction was sent. Confirmation not verified yet. Check it on Nearblocks, then tap Create community to continue.");
+    return;
+  }
+  if (pending.step === "dao") {
+    // DAO confirmed: verify it answers, then register the community.
+    setBusy(true, "Registering…");
+    try {
+      await waitForDao(pending.daoId);
+      savePending({ step: "community", daoName: pending.daoName, daoId: pending.daoId, fields: pending.fields });
+      await sendCreateCommunity(pending.fields, pending.daoId);
+      pageStatus("DAO " + pending.daoId + " is ready. Community creation sent. Wait for the wallet to confirm, then open the live communities list.");
+    } catch (e) { reportFailure(e); }
+    setBusy(false);
+    return;
+  }
+  // Community step confirmed: take the user to the new community page.
+  const communityId = slugify(pending.fields.name);
+  const found = await waitForCommunity(communityId);
+  clearPending();
+  if (found) {
+    window.location.href = communityUrl(communityId);
+    return;
+  }
+  const s = el("pageStatus");
+  if (s) {
+    s.innerHTML = "Community created. Open it here: <a href=\"" + escapeHtml(communityUrl(communityId)) + "\">" + escapeHtml(communityId) + "</a>.";
+  } else {
+    pageStatus("Community created. Open the live communities list to see it.");
+  }
+}
+el("cName").addEventListener("input", () => {
+  if (!daoNameEdited) { el("cDaoName").value = slugify(el("cName").value); }
+  updateDaoPreview();
+});
+el("cDaoName").addEventListener("input", () => { daoNameEdited = true; updateDaoPreview(); });
+toggleDaoPanels();
+initWallet().then(() => { resumePending(); });
 </script>
 </body>
 </html>

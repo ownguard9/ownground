@@ -5,10 +5,43 @@ let community = null;
 function fmtDate(ns) {
   try { return new Date(Number(BigInt(ns) / 1000000n)).toLocaleString(); } catch (_) { return "unknown"; }
 }
-function needWallet() {
-  if (!walletAccountId) { pageStatus("Connect a wallet first."); return false; }
+function needWallet(statusFn) {
+  if (!walletAccountId) { (statusFn || pageStatus)("Connect a wallet first."); return false; }
   return true;
 }
+
+// Feedback next to the button that was clicked, so the user sees the
+// result where they are instead of scrolling to the top of the page.
+// The page-level status at the top keeps load status only ("Loading
+// this community…", load errors). Wording of every message is unchanged.
+function localStatus(id, msg) {
+  const s = el(id);
+  if (s) s.textContent = msg;
+}
+function localFailure(id, err) {
+  let r = null;
+  try {
+    if (typeof classifyFailure === "function") r = classifyFailure(err);
+  } catch (_) { /* classifier unavailable */ }
+  if (!r) {
+    const m = err && err.message ? err.message : String(err);
+    r = { category: "contract", text: "Rejected. " + m.slice(0, 200) + " No money moved." };
+  }
+  localStatus(id, r.text);
+  return r;
+}
+function campaignStatus(msg) { localStatus("campaignStatus", msg); }
+function campaignFailure(err) { return localFailure("campaignStatus", err); }
+function campStatus(campaignId, msg) { localStatus("campStatus-" + campaignId, msg); }
+function campFailure(campaignId, err) { return localFailure("campStatus-" + campaignId, err); }
+function acquireStatus(campaignId, msg) { localStatus("acquireStatus-" + campaignId, msg); }
+function acquireFailure(campaignId, err) { return localFailure("acquireStatus-" + campaignId, err); }
+function policyStatus(msg) { localStatus("policyStatus", msg); }
+function policyFailure(err) { return localFailure("policyStatus", err); }
+function spendingStatus(msg) { localStatus("spendingStatus", msg); }
+function spendingFailure(err) { return localFailure("spendingStatus", err); }
+function amendStatus(msg) { localStatus("amendStatus", msg); }
+function amendFailure(err) { return localFailure("amendStatus", err); }
 
 // Read the list page's handoff, if the user just clicked through and
 // it is fresh. It only carries the header; the numbers still refresh live.
@@ -222,13 +255,15 @@ function renderCommunity(c, t, policies, campaigns, assets, distributions) {
         '<label>Seller account id<input id="seller-' + escapeHtml(camp.id) + '" placeholder="seller.testnet"></label>' +
         rows +
         '<p class="small">Allocation total: <span id="allocSum-' + escapeHtml(camp.id) + '">10000</span> of 10000 basis points</p>' +
-        '<button onclick="acquireAsset(\'' + escapeHtml(camp.id) + '\')">Propose acquisition (DAO)</button></div>';
+        '<button onclick="acquireAsset(\'' + escapeHtml(camp.id) + '\')">Propose acquisition (DAO)</button>' +
+        '<p id="acquireStatus-' + escapeHtml(camp.id) + '" class="status"></p></div>';
     }
     return '<div class="panel"><h3>' + escapeHtml(camp.asset_name) + '</h3>' +
       "<p>Target " + fmtYocto(camp.target) + " NEAR, raised " + fmtYocto(camp.raised) + " NEAR. Status " + escapeHtml(camp.status) + ". Deadline " + fmtDate(camp.deadline) + ".</p>" +
       "<p class=\"small muted\">You contributed " + (mine ? fmtYocto(mine[1]) + " NEAR" : "nothing yet") + ".</p>" +
       '<label>Amount in NEAR<input id="amt-' + escapeHtml(camp.id) + '" placeholder="2.5"></label>' +
-      '<button onclick="contribute(\'' + escapeHtml(camp.id) + '\')">Contribute</button>' + refundBtn + cancelBtn + "</div>" + acquireBox;
+      '<button onclick="contribute(\'' + escapeHtml(camp.id) + '\')">Contribute</button>' + refundBtn + cancelBtn +
+      '<p id="campStatus-' + escapeHtml(camp.id) + '" class="status"></p></div>' + acquireBox;
   }).join("") : "<p>No campaigns yet.</p>";
 
   el("assets").innerHTML = assets.length ? assets.map((a) => {
@@ -241,45 +276,50 @@ function renderCommunity(c, t, policies, campaigns, assets, distributions) {
 }
 
 async function createCampaign() {
-  if (!needWallet()) return;
+  if (!needWallet(campaignStatus)) return;
   const name = el("campName").value.trim();
   const cat = el("campCat").value.trim();
   const target = el("campTarget").value.trim();
   const date = el("campDeadline").value;
-  if (!name || !cat || !target || !date) { pageStatus("Fill in the asset name, category, target and deadline."); return; }
+  if (!name || !cat || !target || !date) { campaignStatus("Fill in the asset name, category, target and deadline."); return; }
   let targetYocto, deadlineNs;
-  try { targetYocto = nearToYocto(target); } catch (e) { pageStatus(e.message); return; }
+  try { targetYocto = nearToYocto(target); } catch (e) { campaignStatus(e.message); return; }
   deadlineNs = BigInt(Date.parse(date + "T00:00:00Z")) * 1000000n;
-  if (deadlineNs <= BigInt(Date.now()) * 1000000n) { pageStatus("Pick a future deadline."); return; }
+  if (deadlineNs <= BigInt(Date.now()) * 1000000n) { campaignStatus("Pick a future deadline."); return; }
   try {
-    pageStatus("Starting the campaign…");
+    campaignStatus("Starting the campaign…");
+    // deadline is u64 in the contract, so it goes as a JSON number.
+    // Number() rounds the nanosecond BigInt to the nearest double
+    // (at most ~128 ns off), which is irrelevant for a deadline, and
+    // JSON.stringify writes it as a plain integer below 1e21, which
+    // serde parses as u64. target stays a string: it is U128.
     await walletCall(contractId(), "create_campaign", {
       community_id: communityId, asset_name: name, category: cat,
-      target: targetYocto.toString(), deadline: deadlineNs.toString(),
+      target: targetYocto.toString(), deadline: Number(deadlineNs),
     }, "50000000000000000000000");
-  } catch (e) { reportFailure(e); }
+  } catch (e) { campaignFailure(e); }
 }
 
 async function contribute(campaignId) {
-  if (!needWallet()) return;
+  if (!needWallet((m) => campStatus(campaignId, m))) return;
   let amount;
-  try { amount = nearToYocto(el("amt-" + campaignId).value); } catch (e) { pageStatus(e.message); return; }
-  if (amount <= 0n) { pageStatus("Enter an amount above 0."); return; }
+  try { amount = nearToYocto(el("amt-" + campaignId).value); } catch (e) { campStatus(campaignId, e.message); return; }
+  if (amount <= 0n) { campStatus(campaignId, "Enter an amount above 0."); return; }
   // The contract takes the contribution from the attached deposit minus
   // the 0.01 NEAR storage deposit, so attach amount plus 0.01 NEAR.
   const deposit = amount + 10000000000000000000000n;
   try {
-    pageStatus("Contributing…");
+    campStatus(campaignId, "Contributing…");
     await walletCall(contractId(), "contribute", { campaign_id: campaignId }, deposit.toString());
-  } catch (e) { reportFailure(e); }
+  } catch (e) { campFailure(campaignId, e); }
 }
 
 async function refund(campaignId) {
-  if (!needWallet()) return;
+  if (!needWallet((m) => campStatus(campaignId, m))) return;
   try {
-    pageStatus("Requesting a refund…");
+    campStatus(campaignId, "Requesting a refund…");
     await walletCall(contractId(), "refund", { campaign_id: campaignId }, "10000000000000000000000");
-  } catch (e) { reportFailure(e); }
+  } catch (e) { campFailure(campaignId, e); }
 }
 
 // Live total for the allocation editor: the proposal is blocked unless
@@ -300,14 +340,14 @@ function readAllocations(campaignId) {
 }
 
 async function acquireAsset(campaignId) {
-  if (!needWallet()) return;
+  if (!needWallet((m) => acquireStatus(campaignId, m))) return;
   const seller = el("seller-" + campaignId).value.trim();
-  if (!seller) { pageStatus("Enter the seller account id."); return; }
+  if (!seller) { acquireStatus(campaignId, "Enter the seller account id."); return; }
   const allocation = readAllocations(campaignId);
   const check = validateAllocations(allocation, community.members);
-  if (!check.ok) { pageStatus(check.error); return; }
+  if (!check.ok) { acquireStatus(campaignId, check.error); return; }
   try {
-    pageStatus("Creating a DAO proposal to acquire the asset…");
+    acquireStatus(campaignId, "Creating a DAO proposal to acquire the asset…");
     const id = await createDaoProposal(
       community.dao_id,
       "Acquire the asset for campaign " + campaignId + " from " + seller,
@@ -316,13 +356,13 @@ async function acquireAsset(campaignId) {
       "10000000000000000000000"
     );
     showProposalCreated(community.dao_id, id, "Acquire the asset for campaign " + campaignId + " from " + seller);
-  } catch (e) { reportFailure(e); }
+  } catch (e) { acquireFailure(campaignId, e); }
 }
 
 async function cancelCampaign(campaignId) {
-  if (!needWallet()) return;
+  if (!needWallet((m) => campStatus(campaignId, m))) return;
   try {
-    pageStatus("Creating a DAO proposal to cancel the campaign…");
+    campStatus(campaignId, "Creating a DAO proposal to cancel the campaign…");
     const id = await createDaoProposal(
       community.dao_id,
       "Cancel campaign " + campaignId + " and refund every contributor",
@@ -331,19 +371,19 @@ async function cancelCampaign(campaignId) {
       "10000000000000000000000"
     );
     showProposalCreated(community.dao_id, id, "Cancel campaign " + campaignId + " and refund every contributor");
-  } catch (e) { reportFailure(e); }
+  } catch (e) { campFailure(campaignId, e); }
 }
 
 async function proposePolicy() {
-  if (!needWallet()) return;
+  if (!needWallet(policyStatus)) return;
   const m = Number(el("polMembers").value);
   const t = Number(el("polTreasury").value);
   const mn = Number(el("polMaint").value);
   const a = Number(el("polActivity").value);
-  if ([m, t, mn, a].some((x) => Number.isNaN(x) || x < 0 || x > 100)) { pageStatus("Percents must be numbers between 0 and 100."); return; }
-  if (m + t + mn !== 100) { pageStatus("Members, retention and maintenance must sum to 100."); return; }
+  if ([m, t, mn, a].some((x) => Number.isNaN(x) || x < 0 || x > 100)) { policyStatus("Percents must be numbers between 0 and 100."); return; }
+  if (m + t + mn !== 100) { policyStatus("Members, retention and maintenance must sum to 100."); return; }
   try {
-    pageStatus("Creating a DAO proposal for the distribution policy change…");
+    policyStatus("Creating a DAO proposal for the distribution policy change…");
     const id = await createDaoProposal(
       community.dao_id,
       "Propose a distribution policy change for community " + communityId,
@@ -361,20 +401,20 @@ async function proposePolicy() {
       "10000000000000000000000"
     );
     showProposalCreated(community.dao_id, id, "Propose a distribution policy change for community " + communityId);
-  } catch (e) { reportFailure(e); }
+  } catch (e) { policyFailure(e); }
 }
 
 async function proposeSpendingPolicy() {
-  if (!needWallet()) return;
+  if (!needWallet(spendingStatus)) return;
   let cap, reserve;
   try {
     cap = nearToYocto(el("spCap").value);
     reserve = nearToYocto(el("spReserve").value);
-  } catch (e) { pageStatus(e.message); return; }
+  } catch (e) { spendingStatus(e.message); return; }
   const cats = el("spCats").value.split(",").map((s) => s.trim()).filter(Boolean);
-  if (!cats.length) { pageStatus("List at least one allowed category."); return; }
+  if (!cats.length) { spendingStatus("List at least one allowed category."); return; }
   try {
-    pageStatus("Creating a DAO proposal for the spending policy change…");
+    spendingStatus("Creating a DAO proposal for the spending policy change…");
     const id = await createDaoProposal(
       community.dao_id,
       "Propose a spending policy change for community " + communityId,
@@ -393,26 +433,26 @@ async function proposeSpendingPolicy() {
       "10000000000000000000000"
     );
     showProposalCreated(community.dao_id, id, "Propose a spending policy change for community " + communityId);
-  } catch (e) { reportFailure(e); }
+  } catch (e) { spendingFailure(e); }
 }
 
 // execute_policy_change is NOT DAO gated: the contract lets anyone call
 // it after the timelock, so this stays a direct member call.
 async function executeAmendment(id) {
-  if (!needWallet()) return;
+  if (!needWallet(amendStatus)) return;
   try {
-    pageStatus("Executing the amendment…");
+    amendStatus("Executing the amendment…");
     await walletCall(contractId(), "execute_policy_change", {
       community_id: communityId,
       amendment_id: id,
     }, "10000000000000000000000");
-  } catch (e) { reportFailure(e); }
+  } catch (e) { amendFailure(e); }
 }
 
 async function cancelAmendment(id) {
-  if (!needWallet()) return;
+  if (!needWallet(amendStatus)) return;
   try {
-    pageStatus("Creating a DAO proposal to cancel the amendment…");
+    amendStatus("Creating a DAO proposal to cancel the amendment…");
     const pid = await createDaoProposal(
       community.dao_id,
       "Cancel policy amendment " + id + " for community " + communityId,
@@ -424,7 +464,7 @@ async function cancelAmendment(id) {
       "10000000000000000000000"
     );
     showProposalCreated(community.dao_id, pid, "Cancel policy amendment " + id + " for community " + communityId);
-  } catch (e) { reportFailure(e); }
+  } catch (e) { amendFailure(e); }
 }
 
 window.owngroundWalletChanged = loadCommunity;

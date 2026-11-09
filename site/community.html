@@ -50,6 +50,7 @@
       <label>Target in NEAR<input id="campTarget" placeholder="10"></label>
       <label>Deadline<input id="campDeadline" type="date"></label>
       <button onclick="createCampaign()">Start campaign</button>
+      <p id="campaignStatus" class="status"></p>
       <p class="small muted">Starting a campaign attaches 0.05 NEAR for storage. You must be a member.</p>
     </div>
 
@@ -67,6 +68,7 @@
       <label>Maintenance percent<input id="polMaint" value="15"></label>
       <label>Activity share of the member pool, percent<input id="polActivity" value="10"></label>
       <button onclick="proposePolicy()">Propose policy change</button>
+      <p id="policyStatus" class="status"></p>
       <p class="small">Current policy: <span id="curPolicy">none set yet</span></p>
       <h3>Propose a spending policy change</h3>
       <p class="small muted">The DAO sets a cap on single expenses, a minimum treasury reserve and the allowed categories. An expense outside the policy is rejected before any transfer, even a DAO approved one. Acquisitions are not capped. Changes go through the same propose, wait, execute flow.</p>
@@ -74,8 +76,10 @@
       <label>Minimum treasury reserve in NEAR<input id="spReserve" value="1"></label>
       <label>Allowed categories, comma separated<input id="spCats" value="maintenance, operations"></label>
       <button onclick="proposeSpendingPolicy()">Propose spending policy change</button>
+      <p id="spendingStatus" class="status"></p>
       <p class="small">Current spending policy: <span id="curSpending">none set yet</span></p>
       <h3>Policy amendment history</h3>
+      <p id="amendStatus" class="status"></p>
       <div id="amendments"></div>
     </div>
     </div>

@@ -1,0 +1,25 @@
+{
+  "network": "testnet",
+  "factory_id": "sputnikv2.testnet",
+  "dao_id": "vehicle-coop-factory-test.sputnikv2.testnet",
+  "dao_name": "vehicle-coop-factory-test",
+  "signer": "peter-vehicles.testnet",
+  "deposit_yocto": "10000000000000000000000000",
+  "deposit_near": "10",
+  "gas": "150000000000000",
+  "create_tx": "CBa3enxyk8SRuvgp6aiPFUQtXJYPmvEUDHZT5CgmLyaS",
+  "council": [
+    "daniel-vehicles.testnet",
+    "felix-vehicles.testnet",
+    "grace-vehicles.testnet",
+    "peter-vehicles.testnet"
+  ],
+  "vote_threshold": "Weight 2 (2 of 4 council approvals pass a proposal)",
+  "config": {
+    "name": "vehicle-coop-factory-test",
+    "purpose": "Factory test DAO for the Vehicle Cooperative",
+    "metadata": ""
+  },
+  "dao_balance_yocto": "10000000000000000000000000",
+  "created_at": "2026-11-09T13:24:57.187Z"
+}
