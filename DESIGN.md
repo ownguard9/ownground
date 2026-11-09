@@ -527,8 +527,10 @@ only actions the contract itself sees):
   contribution — which contradicts the same paragraph's "splitting earns no
   extra points". The cumulative rule is the one that satisfies the stated
   property: the same total always earns the same points however it is split.)
-- Each revenue record earns 1 point (onchain or reported), for the member
-  who recorded it. A non-member who records onchain revenue earns no point.
+- Each verified revenue entry earns work points (record points +
+  per-NEAR points from the activity policy) for the member who
+  recorded it, once — at attestation. Onchain deposits earn no points:
+  a deposit proves money moved, not that the asset earned it.
 - Points only ever increase, and only on those two actions.
 
 Distribution policy gains one parameter, `activity_bp` (0-10000, default
@@ -567,10 +569,12 @@ fallback (whole pool by ownership); default 10% activity slice; a policy
 with activity_bp 0 behaves exactly as the pre-activity distribution.
 
 Demo change: the demo's 4 members contribute 2.5 NEAR each (2 points
-each); the member who records the 3 NEAR revenue earns 1 more point (3
-total). The distribution shows the activity slice: the revenue recorder
-gets a slightly larger share than the other three, and the log shows the
-exact split.
+each); bob's 1 NEAR reported entry earns him 2 work points (1 record +
+1 per NEAR) once alice attests it, while alice's 3 NEAR onchain deposit
+earns 0. The dispute then removes bob's points, so at distribution no
+verified work stands and the activity slice falls back to ownership:
+all four equal owners get 0.39 NEAR each, and the log shows the exact
+split.
 
 ### What this does not add
 
@@ -749,12 +753,15 @@ The demo script's log shows, with transaction links:
   contract with the max-expense reason).
 - An unverified revenue entry earns no points (a `reported` entry is
   recorded and the recorder's work points stay 0).
-- A verified activity earns points (the 3 NEAR `onchain` revenue record
-  earns work points; a `reported` entry earns points only after a
-  different member attests it).
-- Two members with equal ownership receive different total distributions
-  because of verified activity (the revenue recorder's total exceeds the
-  others' by exactly the activity slice).
+- A verified activity earns points (a `reported` entry earns points
+  only after a different member attests it — bob's 1 NEAR entry earns
+  2 points; an `onchain` deposit earns no points, since a deposit
+  proves money moved, not that the asset earned it).
+- With no verified work standing at distribution, the activity slice
+  falls back to ownership: all four equal owners receive the same
+  0.39 NEAR. (The mid-flow split, before the dispute is upheld, shows
+  verified activity earning different totals: bob 0.4875 vs alice
+  0.3375.)
 - Total payouts equal the approved distribution amount exactly (the log
   shows the sum of member payouts + retention + maintenance = D, to the
   yocto).
@@ -790,25 +797,35 @@ with the same reference is rejected.
   `resolve_dispute(entry_id, uphold: bool)` (DAO only). If the dispute
   is upheld (verification overturned): the entry becomes `rejected`, the
   recorder's work points from that entry are removed (from the current
-  epoch; if already consumed in a distribution, deducted from the
-  member's current-epoch points, floored at 0 — the paid distribution is
-  never re-run), and the attestor's bond goes to the community treasury.
+  epoch only: if the entry's epoch already closed — a distribution ran
+  since the attestation — the points are already consumed or reset, so
+  nothing is deducted and the member's new-epoch points are untouched;
+  the paid distribution is never re-run), and the attestor's bond goes
+  to the community treasury.
   If the dispute is rejected (verification stands): the entry returns to
-  `verified` and the bond is returned to the attestor.
+  `verified` and the bond is returned to the attestor. The restore is
+  epoch-scoped the same way: points return only if the entry's epoch
+  is still current, so a late rejection can never double-pay points
+  into a new epoch.
 - Bond release: if the dispute window passes with no dispute, the
   attestor calls `release_attestation_bond(entry_id)` and gets the bond
   back.
 - Work points are awarded exactly once: points are tied to the entry id,
   the entry records `points_awarded`, and awarding happens once — at
-  verification (attested reported entry) or at record time (onchain
-  entry). A second award attempt is rejected by the status check.
+  verification (attested reported entry) only. Onchain entries earn no
+  points: a deposit proves money moved, not that the asset earned it.
+  A second award attempt is rejected by the status check. The entry
+  also records `epoch`, the epoch in which its points were awarded, so
+  a dispute resolved after a distribution can never suspend or restore
+  points from a closed epoch.
 
 ### Safeguard 2 — Prevent circular revenue farming
 
 Depositing and withdrawing the same capital must not generate unlimited
 verified work points. Only qualifying economic activity earns rewards.
 Qualifying activity in OwnGround is verified revenue generation only
-(an onchain deposit, or an attested reported entry). No points are
+(an attested reported entry — an onchain deposit proves money moved,
+not that the asset earned it, and earns no points). No points are
 awarded for proposals, votes, claims, or any other submission.
 
 Three layers of defence:
@@ -981,25 +998,40 @@ fix below is what the contract actually implements, and why.
     the unit tests call directly, because the mock blockchain in unit
     tests carries no promise results.
 11. The demo distribution numbers under the final model: the 3 NEAR
-    onchain revenue earns alice 4 work points (1 record + 3 per NEAR);
-    the 1 NEAR reported entry earns bob 2 work points (1 + 1) only after
-    alice attests it. Total work points 6 before the dispute proof.
-    The dispute proof then removes bob's points and the upheld bond
-    enters revenue, so the final distribution uses D = 2.6 NEAR
-    (total_revenue 3.1 minus expenses 0.5), member pool 1.56 NEAR,
-    activity pool 0.156 NEAR, ownership pool 1.404 NEAR. Alice
-    0.507 NEAR, bob 0.351 NEAR, carol 0.351 NEAR, dave 0.351 NEAR.
+    onchain revenue earns alice 0 work points — a deposit proves
+    money moved, not that the asset earned it, so onchain deposits
+    earn no points at all; the 1 NEAR reported entry earns bob 2 work
+    points (1 + 1) only after alice attests it. Total work points 2
+    before the dispute proof. The dispute proof then removes bob's
+    points and the upheld bond enters revenue, so the final
+    distribution uses D = 2.6 NEAR (total_revenue 3.1 minus expenses
+    0.5), member pool 1.56 NEAR, activity pool 0 NEAR, ownership pool
+    1.56 NEAR. Alice 0.39 NEAR, bob 0.39 NEAR, carol 0.39 NEAR, dave
+    0.39 NEAR — with no verified work standing, the activity slice
+    falls back to ownership and all four equal owners get the same.
     Final treasury 1.04 NEAR exactly (retention 0.65 + maintenance 0.39
     remain as reserves; only the 1.56 NEAR member pool leaves). (The earlier recorded numbers —
-    D 2.5, alice 0.4375, bob 0.3875, others 0.3375, treasury 1.0 —
+    D 2.5, alice 0.3375, bob 0.4875, others 0.3375, treasury 1.0 —
     were the pre-dispute split and are kept in the maths script as the
     mid-flow "verified activity earns points" check.)
-12. Known limitation, out of scope for these sections: acquire_asset,
-    cancel_campaign, and pay_expense use bare transfers with no
-    callback, so a failed seller, refund, or expense transfer is not
-    reconciled by the contract (the ledger counts it as spent while the
-    money stays in the contract). Only execute_distribution payouts and
-    bond returns carry callbacks. See the README Limits section.
+12. Fixed (was a known limitation, out of scope for these sections):
+    acquire_asset, cancel_campaign, pay_expense, refund, and
+    claim_refund now all carry promise callbacks following the
+    payout/bond pattern, and the reconciliation logic is extracted
+    into internal functions the unit tests call directly (the mock
+    blockchain carries no promise results). A failed transfer reverts
+    the state change so the operation is retryable: a failed
+    acquisition returns the campaign to Funded and removes the asset
+    record; a failed expense removes the expense entry; a failed
+    individual refund restores the contribution; a failed claim
+    refund restores the claim. cancel_campaign no longer pushes
+    transfers in a loop: it records one claimable refund per
+    contributor (claim_refund pays one contributor, with a callback),
+    and unclaimed refunds count as LOCKED funds, so the DAO cannot
+    spend money owed to contributors. total_refunds counts a refund
+    only when its claim payment is initiated, not at cancel time.
+    (The README Limits section still states the old limitation and
+    needs the same update — it is out of scope for this change.)
 13. The safeguards test list says "a non-DAO caller cannot propose,
     execute, or cancel an amendment", but the amendment flow says
     "after the deadline, anyone calls execute_policy_change". The flow
@@ -1021,10 +1053,10 @@ fix below is what the contract actually implements, and why.
     revenue, so D grows from 2.5 to 2.6 NEAR and bob's work points
     drop from 2 to 0 before the distribution. The final numbers are
     recomputed in this section (fix 11) and in check-maths-activity.mjs:
-    D 2.6, alice 0.507, bob 0.351, carol 0.351, dave 0.351, retention
+    D 2.6, alice 0.39, bob 0.39, carol 0.39, dave 0.39, retention
     0.65, maintenance 0.39, final treasury 1.04 NEAR (the retained shares
     stay as reserves). The pre-dispute
-    split (alice 0.4375, bob 0.3875) is still the mid-flow proof that
+    split (alice 0.3375, bob 0.4875) is still the mid-flow proof that
     verified activity earns points. The demo order is fixed: dispute
     and DAO resolution happen before execute_distribution.
 16. ABI generation needs JsonSchema on the contract's public types.

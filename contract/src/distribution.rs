@@ -275,6 +275,7 @@ mod tests {
             attestor: None,
             verified_at: None,
             points_awarded: 4,
+            epoch: 0,
             bond_attestor: None,
             bond_status: None,
         });
@@ -300,6 +301,7 @@ mod tests {
             attestor: None,
             verified_at: None,
             points_awarded: 0,
+            epoch: 0,
             bond_attestor: None,
             bond_status: None,
         });
@@ -314,6 +316,7 @@ mod tests {
             attestor: Some(acc("b.testnet")),
             verified_at: Some(0),
             points_awarded: 2,
+            epoch: 0,
             bond_attestor: Some(acc("b.testnet")),
             bond_status: Some(crate::revenue::BondStatus::Held),
         });
@@ -353,6 +356,7 @@ mod tests {
             attestor: None,
             verified_at: None,
             points_awarded: 4,
+            epoch: 0,
             bond_attestor: None,
             bond_status: None,
         });
@@ -371,10 +375,10 @@ mod tests {
     #[test]
     fn activity_slice_demo_numbers_exact() {
         // Demo, final model: D = 2.5 NEAR, 60/25/15, activity 10% of the
-        // member pool. Work points only: alice 4 (3 NEAR onchain revenue:
-        // 1 record + 3 per NEAR), bob 2 (1 NEAR attested entry: 1 + 1),
-        // carol and dave 0. Capital points (2 each) do not affect the
-        // slice. Activity pool 0.15 NEAR, ownership pool 1.35 NEAR.
+        // member pool. Work points only, from attested reported revenue
+        // (onchain deposits earn no points): alice 4, bob 2, carol and
+        // dave 0. Capital points (2 each) do not affect the slice.
+        // Activity pool 0.15 NEAR, ownership pool 1.35 NEAR.
         let d = 2_500_000_000_000_000_000_000_000u128;
         let allocs = vec![
             (acc("alice.testnet"), 2500),

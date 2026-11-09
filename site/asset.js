@@ -46,8 +46,10 @@ function renderAsset(a, c, t, revenue, expenses, distributions) {
   el("assetCards").innerHTML = cards.map(([k, v]) =>
     '<div class="card"><div class="muted small">' + escapeHtml(k) + '</div><div class="big">' + escapeHtml(v) + "</div></div>").join("");
 
+  // "Onchain" means the deposit was confirmed onchain, never that the
+  // asset generated the income. "Verified" is only for attested entries.
   const statusLabel = {
-    Onchain: "Verified onchain",
+    Onchain: "Deposit confirmed",
     Pending: "Reported — not independently verified",
     Verified: "Verified by attestation",
     Disputed: "Disputed — points suspended",
@@ -65,7 +67,8 @@ function renderAsset(a, c, t, revenue, expenses, distributions) {
       actions += ' <button onclick="releaseBond(' + r.id + ')">Release bond</button>';
     }
     if (r.status === "Disputed") {
-      actions += ' <span class="small muted">Awaiting a DAO vote calling resolve_dispute.</span>';
+      actions += ' <button onclick="resolveDispute(' + r.id + ', true)">Propose uphold dispute (DAO)</button>' +
+        ' <button onclick="resolveDispute(' + r.id + ', false)">Propose reject dispute (DAO)</button>';
     }
     return '<div class="panel"><p>' + fmtYocto(r.amount) + " NEAR, " + escapeHtml(r.source) +
       " (" + escapeHtml(statusLabel[r.status] || r.status) + "). Reference " + escapeHtml(r.reference) +
@@ -143,11 +146,34 @@ async function payExpense() {
   const cat = el("expCat").value.trim();
   if (!recipient || !desc || !cat) { pageStatus("Fill in the recipient, description and category."); return; }
   try {
-    pageStatus("Paying the expense…");
-    await walletCall(contractId(), "pay_expense", {
-      asset_id: assetId, amount: amount.toString(), recipient: recipient,
-      description: desc, category: cat,
-    }, "10000000000000000000000");
+    pageStatus("Creating a DAO proposal to pay the expense…");
+    const id = await createDaoProposal(
+      community.dao_id,
+      "Pay an expense of " + fmtYocto(amount) + " NEAR to " + recipient + " for asset " + assetId,
+      "pay_expense",
+      {
+        asset_id: assetId, amount: amount.toString(), recipient: recipient,
+        description: desc, category: cat,
+      },
+      "10000000000000000000000"
+    );
+    showProposalCreated(community.dao_id, id, "Pay an expense of " + fmtYocto(amount) + " NEAR to " + recipient + " for asset " + assetId);
+  } catch (e) { reportFailure(e); }
+}
+
+async function resolveDispute(entryId, uphold) {
+  if (!needWallet()) return;
+  const what = uphold ? "uphold" : "reject";
+  try {
+    pageStatus("Creating a DAO proposal to " + what + " the dispute…");
+    const id = await createDaoProposal(
+      community.dao_id,
+      (uphold ? "Uphold" : "Reject") + " the dispute on revenue entry " + entryId + " for asset " + assetId,
+      "resolve_dispute",
+      { asset_id: assetId, entry_id: entryId, uphold: uphold },
+      "10000000000000000000000"
+    );
+    showProposalCreated(community.dao_id, id, (uphold ? "Uphold" : "Reject") + " the dispute on revenue entry " + entryId + " for asset " + assetId);
   } catch (e) { reportFailure(e); }
 }
 

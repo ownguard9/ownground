@@ -90,24 +90,27 @@ const ALLOCS = [["alice", 2500], ["bob", 2500], ["carol", 2500], ["dave", 2500]]
 // The dispute proof runs BEFORE the distribution and is upheld, so
 // bob's 2 work points are removed and the 0.1 NEAR bond enters the
 // treasury as revenue. total_revenue is 3.1 NEAR, expenses 0.5 NEAR,
-// so D = 2.6 NEAR. Work points at distribution: alice 4, bob 0.
+// so D = 2.6 NEAR. Work points at distribution: alice 0 (her 3 NEAR
+// was an onchain deposit, which earns no points), bob 0 — so the
+// activity slice falls back to ownership: activity pool 0, ownership
+// pool 1.56, each of the four equal owners 0.39 NEAR.
 {
-  const points = [["alice", 4n]];
+  const points = [];
   const D = 26n * N / 10n; // 2.6 NEAR
   const s = splitActivity(D, POLICY, ALLOCS, points);
   check('demo exact sum', s.total === D, `total=${s.total} D=${D}`);
   check('demo member total 1.56 exact', s.memberTotal === 156n * N / 100n, `${s.memberTotal}`);
-  check('demo alice 0.507', s.payouts.get("alice") === 507n * N / 1000n, `${s.payouts.get("alice")}`);
-  check('demo bob 0.351', s.payouts.get("bob") === 351n * N / 1000n, `${s.payouts.get("bob")}`);
-  check('demo others 0.351', ["carol", "dave"].every((m) => s.payouts.get(m) === 351n * N / 1000n));
-  check('demo alice ownership 0.351', s.ownershipPayouts.get("alice") === 351n * N / 1000n);
-  check('demo alice activity 0.156', s.activityPayouts.get("alice") === 156n * N / 1000n);
+  check('demo alice 0.39', s.payouts.get("alice") === 390n * N / 1000n, `${s.payouts.get("alice")}`);
+  check('demo bob 0.39', s.payouts.get("bob") === 390n * N / 1000n, `${s.payouts.get("bob")}`);
+  check('demo others 0.39', ["carol", "dave"].every((m) => s.payouts.get(m) === 390n * N / 1000n));
+  check('demo all four equal (fallback to ownership)', ["alice", "bob", "carol", "dave"].every((m) => s.payouts.get(m) === 390n * N / 1000n));
+  check('demo alice ownership 0.39', s.ownershipPayouts.get("alice") === 390n * N / 1000n);
+  check('demo alice activity 0 (no verified work stands)', (s.activityPayouts.get("alice") || 0n) === 0n);
   check('demo bob activity 0 (points removed by dispute)', (s.activityPayouts.get("bob") || 0n) === 0n);
-  check('demo alice gets more than bob', s.payouts.get("alice") > s.payouts.get("bob"));
   check('demo retention 0.65 exact', s.retention === 65n * N / 100n, `${s.retention}`);
   check('demo maintenance 0.39', s.maintenance === 39n * N / 100n);
-  check('demo activity pool 0.156', s.A === 156n * N / 1000n);
-  check('demo ownership pool 1.404', s.O === 1404n * N / 1000n);
+  check('demo activity pool 0', s.A === 0n);
+  check('demo ownership pool 1.56', s.O === 156n * N / 100n);
 }
 
 // --- dispute flow: treasury equation with the forfeited bond ---
@@ -123,19 +126,21 @@ const ALLOCS = [["alice", 2500], ["bob", 2500], ["carol", 2500], ["dave", 2500]]
   const treasury = contributions + revenue - acquisitions - expenses - payouts;
   check('dispute treasury final 1.04 NEAR', treasury === 104n * N / 100n, `${treasury}`);
   check('dispute D = revenue - expenses = 2.6', revenue - expenses === 26n * N / 10n);
-  // Before the dispute, bob held 2 work points (1 NEAR attested entry);
-  // after the upheld dispute they are 0 and the activity pool goes to
-  // alice alone. The pre-dispute split (D 2.5, bob 2 pts) is the
+  // Before the dispute, bob held 2 work points (1 NEAR attested entry)
+  // and alice held 0 (her 3 NEAR was an onchain deposit, which earns
+  // no points); after the upheld dispute bob's are 0 too and the
+  // activity pool is 0. The pre-dispute split (D 2.5, bob 2 pts) is the
   // "verified activity earns points" proof, checked mid-flow.
-  const before = splitActivity(25n * N / 10n, POLICY, ALLOCS, [["alice", 4n], ["bob", 2n]]);
-  check('dispute pre-dispute bob 0.3875', before.payouts.get("bob") === 3875n * N / 10000n);
-  check('dispute pre-dispute alice 0.4375', before.payouts.get("alice") === 4375n * N / 10000n);
+  const before = splitActivity(25n * N / 10n, POLICY, ALLOCS, [["bob", 2n]]);
+  check('dispute pre-dispute bob 0.4875', before.payouts.get("bob") === 4875n * N / 10000n);
+  check('dispute pre-dispute alice 0.3375', before.payouts.get("alice") === 3375n * N / 10000n);
 }
 
 // --- epoch reset: second distribution uses only new points ---
 {
   // After the first distribution the current points reset to 0. Alice
-  // records 1 NEAR more (2 fresh points); bob records nothing.
+  // records 1 NEAR more reported revenue, attested (2 fresh points);
+  // bob records nothing. (An onchain deposit would earn 0 points.)
   const points = [["alice", 2n]];
   const D = N; // 1 NEAR of new revenue
   const s = splitActivity(D, POLICY, ALLOCS, points);
@@ -148,13 +153,14 @@ const ALLOCS = [["alice", 2500], ["bob", 2500], ["carol", 2500], ["dave", 2500]]
 
 // --- circular farming: cycling 3 NEAR recovers less than 3 NEAR ---
 {
-  // Alice deposits 3 NEAR, holds all 4 work points, owns 25%.
-  const points = [["alice", 4n]];
+  // Alice deposits 3 NEAR onchain, which earns no work points, so she
+  // recovers only her 25% ownership share of the member pool.
+  const points = [];
   const D = 3n * N;
   const s = splitActivity(D, POLICY, ALLOCS, points);
   check('farming exact sum', s.total === D);
-  check('farming alice recovers 0.585 < 3', s.payouts.get("alice") === 585n * N / 1000n && s.payouts.get("alice") < 3n * N, `${s.payouts.get("alice")}`);
-  check('farming others 0.405 each', ["bob", "carol", "dave"].every((m) => s.payouts.get(m) === 405n * N / 1000n));
+  check('farming alice recovers 0.45 < 3', s.payouts.get("alice") === 450n * N / 1000n && s.payouts.get("alice") < 3n * N, `${s.payouts.get("alice")}`);
+  check('farming others 0.45 each', ["bob", "carol", "dave"].every((m) => s.payouts.get(m) === 450n * N / 1000n));
 }
 
 // --- zero-points fallback: whole pool by ownership ---

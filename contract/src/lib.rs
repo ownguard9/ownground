@@ -10,8 +10,11 @@
 //! yoctoNEAR, u128, checked arithmetic):
 //!   * treasury = (contributions + revenue deposits)
 //!              - (acquisitions + expenses + distribution payouts + refunds)
-//!   * locked = sum of raised over open/funded campaigns; spends may only
-//!     draw on treasury - locked.
+//!   * locked = sum of raised over open/funded campaigns, plus unclaimed
+//!     refund claims; spends may only draw on treasury - locked.
+//!   * total_refunds counts a refund when its payment is initiated
+//!     (claim_refund for cancelled campaigns, refund for open ones);
+//!     a failed transfer's callback reverts that count.
 //!   * D (per asset) = max(0, revenue_onchain + bond_forfeits - expenses
 //!     - distributed_total),
 //!     capped by available funds: D_effective = min(D, treasury - locked).
@@ -36,8 +39,9 @@ use distribution::{distributable, split_distribution, DistributionRecord};
 use funding::{Campaign, CampaignStatus};
 use governance::{caller, require_dao, require_member};
 use registry::{
-    ActivityPolicy, AmendmentStatus, Community, DistributionPolicy, PolicyAmendment,
-    PolicyParams, PolicyType, SpendingPolicy,
+    validate_activity_policy, validate_distribution_policy, validate_spending_policy,
+    validate_time_window, ActivityPolicy, AmendmentStatus, Community, DistributionPolicy,
+    PolicyAmendment, PolicyParams, PolicyType, SpendingPolicy,
 };
 use revenue::{BondStatus, ExpenseEntry, RevenueEntry, RevenueStatus};
 use treasury::{locked_funds, spendable, treasury_balance};
@@ -170,11 +174,25 @@ impl Contract {
             "community id already exists"
         );
         let mut community = Community::new(id.clone(), name, description, dao_id, members);
+        // Validate every founding policy through the ONE shared path
+        // (deserialized input bypasses constructors, so the check must
+        // run here, not in a constructor). The time bounds run on the
+        // effective values, defaults included.
+        validate_distribution_policy(
+            distribution_policy.members_bp,
+            distribution_policy.treasury_bp,
+            distribution_policy.maintenance_bp,
+            distribution_policy.activity_bp,
+        );
+        validate_spending_policy(&spending_policy);
+        validate_activity_policy(&activity_policy);
         community.policy = distribution_policy;
         community.spending_policy = spending_policy;
         community.activity_policy = activity_policy;
         community.dispute_window_ns = dispute_window_ns.unwrap_or(DEFAULT_DISPUTE_WINDOW_NS);
         community.timelock_ns = timelock_ns.unwrap_or(DEFAULT_TIMELOCK_NS);
+        validate_time_window(community.dispute_window_ns, "dispute_window_ns");
+        validate_time_window(community.timelock_ns, "timelock_ns");
         community.storage_reserve += STORAGE_CREATE_COMMUNITY;
         self.community_ids.push(id.clone());
         self.save_community(&community);
@@ -266,8 +284,10 @@ impl Contract {
     }
 
     /// Acquire the asset a campaign funded. DAO only. Transfers the target
-    /// to the seller in the same call and counts it as acquisition spend.
-    /// Attaches exactly 0.01 NEAR storage.
+    /// to the seller with a callback and counts it as acquisition spend.
+    /// If the transfer fails, the callback reverts the acquisition so the
+    /// DAO can retry (see on_acquire_complete). Attaches exactly 0.01
+    /// NEAR storage.
     #[payable]
     pub fn acquire_asset(
         &mut self,
@@ -319,7 +339,20 @@ impl Contract {
         self.save_community(&community);
         self.save_campaign(&campaign);
         self.save_asset(&asset);
-        let _ = Promise::new(seller.clone()).transfer(NearToken::from_yoctonear(campaign.target));
+        // Transfer with a callback: if the seller transfer fails, the
+        // callback reverts the acquisition (campaign back to Funded,
+        // asset removed, total_acquisitions decremented) so the DAO can
+        // retry. The ledger never counts a failed transfer as spent.
+        let _ = Promise::new(seller.clone())
+            .transfer(NearToken::from_yoctonear(campaign.target))
+            .then(
+                Self::ext(env::current_account_id()).on_acquire_complete(
+                    campaign_id.clone(),
+                    asset_id.clone(),
+                    seller.clone(),
+                    U128(campaign.target),
+                ),
+            );
         events::emit(
             "asset_acquired",
             near_sdk::serde_json::json!({
@@ -332,8 +365,82 @@ impl Contract {
         asset_id
     }
 
-    /// Cancel a campaign and refund every contributor exactly once.
-    /// DAO only, only from open/funded status. Attaches 0.01 NEAR storage.
+    /// Callback for one acquisition transfer. Private: only the contract
+    /// itself may call it, as the continuation of the transfer promise.
+    /// On success nothing changes; on failure the acquisition is
+    /// reverted so the DAO can retry it. A direct call (no promise
+    /// results) is a no-op.
+    #[private]
+    pub fn on_acquire_complete(
+        &mut self,
+        campaign_id: String,
+        asset_id: String,
+        seller: AccountId,
+        amount: U128,
+    ) {
+        if env::promise_results_count() == 0 {
+            return;
+        }
+        if env::promise_result_checked(0, 100).is_err() {
+            self.revert_failed_acquire(&campaign_id, &asset_id, &seller, amount.0);
+        }
+    }
+
+    /// Revert a failed acquisition: the campaign goes back to Funded,
+    /// the asset record is removed entirely (and dropped from the
+    /// community's asset list), and total_acquisitions is decremented.
+    /// Removing the asset — rather than marking it Failed — is the
+    /// cleanest revert: no dangling record can ever be distributed
+    /// from, and the retry creates a fresh asset id. Idempotent: if
+    /// the campaign is no longer Acquired (already reverted, or a
+    /// retry already succeeded) nothing changes. Extracted so unit
+    /// tests can drive it directly (the mock blockchain carries no
+    /// promise results).
+    fn revert_failed_acquire(
+        &mut self,
+        campaign_id: &str,
+        asset_id: &str,
+        seller: &AccountId,
+        amount: u128,
+    ) {
+        let mut campaign = match self.campaigns.get(campaign_id) {
+            Some(c) => c.clone(),
+            None => return,
+        };
+        if campaign.status != CampaignStatus::Acquired {
+            return;
+        }
+        if self.assets.get(asset_id).is_none() {
+            return;
+        }
+        campaign.status = CampaignStatus::Funded;
+        self.save_campaign(&campaign);
+        self.assets.remove(asset_id);
+        let mut community = self.community(&campaign.community_id);
+        community.asset_ids.retain(|id| id != asset_id);
+        community.total_acquisitions = community.total_acquisitions.saturating_sub(amount);
+        self.save_community(&community);
+        events::emit(
+            "acquisition_failed",
+            near_sdk::serde_json::json!({
+                "campaign_id": campaign_id,
+                "asset_id": asset_id,
+                "seller": seller.to_string(),
+                "amount": amount.to_string(),
+            }),
+        );
+    }
+
+    /// Cancel a campaign and record a claimable refund for every
+    /// contributor. DAO only, only from open/funded status. Attaches
+    /// 0.01 NEAR storage. NO transfers are pushed here: each
+    /// contributor claims their refund individually via claim_refund,
+    /// which carries a callback. The claimed amounts are recorded in
+    /// the campaign's refund_claims and count as LOCKED funds until
+    /// claimed, so the DAO cannot spend money owed to contributors.
+    /// total_refunds counts a refund only when its claim payment is
+    /// initiated (claim_refund), not here — the money is still in the
+    /// contract until claimed.
     #[payable]
     pub fn cancel_campaign(&mut self, campaign_id: String) {
         self.require_attached(STORAGE_RECORD);
@@ -346,17 +453,13 @@ impl Contract {
         );
         let refund_total = campaign.raised;
         campaign.status = CampaignStatus::Cancelled;
-        community.total_refunds = community
-            .total_refunds
-            .checked_add(refund_total)
-            .expect("total refunds overflow");
+        // Record one claimable refund per contributor. No transfers:
+        // a loop of fire-and-forget transfers could silently fail for
+        // one contributor while the ledger counted them all refunded.
+        campaign.refund_claims = campaign.contributors.clone();
         community.storage_reserve += STORAGE_RECORD;
         self.save_community(&community);
         self.save_campaign(&campaign);
-        for (contributor, amount) in &campaign.contributors {
-            let _ = Promise::new(contributor.clone())
-                .transfer(NearToken::from_yoctonear(*amount));
-        }
         events::emit(
             "campaign_cancelled",
             near_sdk::serde_json::json!({
@@ -366,12 +469,114 @@ impl Contract {
         );
     }
 
+    /// Claim a refund recorded when a campaign was cancelled (or when
+    /// an individual refund's transfer failed after its campaign moved
+    /// on). Pays ONE contributor — the caller — with a callback: if the
+    /// transfer fails, the callback restores the claim and the
+    /// contributor can retry. Attaches exactly 0.01 NEAR storage.
+    /// total_refunds counts the refund when this payment is initiated;
+    /// the callback reverts that count on failure. Capital points are
+    /// NOT recomputed here: a cancelled campaign's contributions stay
+    /// cumulative, exactly as cancel_campaign has always treated them.
+    #[payable]
+    pub fn claim_refund(&mut self, campaign_id: String) {
+        self.require_attached(STORAGE_RECORD);
+        let mut campaign = self.campaign(&campaign_id);
+        let claimant = caller();
+        let amount = campaign
+            .refund_claims
+            .iter()
+            .find(|(a, _)| *a == claimant)
+            .map(|(_, v)| *v)
+            .expect("caller has no claimable refund in this campaign");
+        campaign.refund_claims.retain(|(a, _)| *a != claimant);
+        self.save_campaign(&campaign);
+        let mut community = self.community(&campaign.community_id);
+        community.total_refunds = community
+            .total_refunds
+            .checked_add(amount)
+            .expect("total refunds overflow");
+        community.storage_reserve += STORAGE_RECORD;
+        self.save_community(&community);
+        let _ = Promise::new(claimant.clone())
+            .transfer(NearToken::from_yoctonear(amount))
+            .then(
+                Self::ext(env::current_account_id()).on_claim_refund_complete(
+                    campaign_id.clone(),
+                    claimant.clone(),
+                    U128(amount),
+                ),
+            );
+        events::emit(
+            "refund_claimed",
+            near_sdk::serde_json::json!({
+                "campaign_id": campaign_id,
+                "contributor": claimant.to_string(),
+                "amount": amount.to_string(),
+            }),
+        );
+    }
+
+    /// Callback for one claim-refund transfer. Private: only the
+    /// contract itself may call it. On failure the claim is restored
+    /// (and total_refunds decremented) so the contributor can retry.
+    /// A direct call (no promise results) is a no-op.
+    #[private]
+    pub fn on_claim_refund_complete(
+        &mut self,
+        campaign_id: String,
+        claimant: AccountId,
+        amount: U128,
+    ) {
+        if env::promise_results_count() == 0 {
+            return;
+        }
+        if env::promise_result_checked(0, 100).is_err() {
+            self.revert_failed_claim_refund(&campaign_id, &claimant, amount.0);
+        }
+    }
+
+    /// Restore a failed claim refund: the claim goes back on the
+    /// campaign and total_refunds is decremented. Idempotent: if the
+    /// claim is already there (already restored) nothing changes.
+    /// Extracted so unit tests can drive it directly (the mock
+    /// blockchain carries no promise results).
+    fn revert_failed_claim_refund(
+        &mut self,
+        campaign_id: &str,
+        claimant: &AccountId,
+        amount: u128,
+    ) {
+        let mut campaign = match self.campaigns.get(campaign_id) {
+            Some(c) => c.clone(),
+            None => return,
+        };
+        if campaign.refund_claims.iter().any(|(a, _)| a == claimant) {
+            return;
+        }
+        campaign.refund_claims.push((claimant.clone(), amount));
+        self.save_campaign(&campaign);
+        let mut community = self.community(&campaign.community_id);
+        community.total_refunds = community.total_refunds.saturating_sub(amount);
+        self.save_community(&community);
+        events::emit(
+            "refund_claim_failed",
+            near_sdk::serde_json::json!({
+                "campaign_id": campaign_id,
+                "contributor": claimant.to_string(),
+                "amount": amount.to_string(),
+            }),
+        );
+    }
+
     /// Refund one member's own contribution from an OPEN campaign, in
     /// full. Anyone who contributed may call it while the campaign is
     /// still open; a funded or acquired campaign cannot be refunded this
     /// way (the DAO cancels it instead). Attaches exactly 0.01 NEAR
     /// storage. The member's capital points are recomputed from their
-    /// remaining cumulative total.
+    /// remaining cumulative total. The transfer carries a callback: if
+    /// it fails, the contribution is restored (and total_refunds
+    /// decremented) so the member can retry.
     #[payable]
     pub fn refund(&mut self, campaign_id: String) {
         self.require_attached(STORAGE_RECORD);
@@ -390,8 +595,10 @@ impl Contract {
         // back from storage and must exclude the refunded contribution.
         self.save_campaign(&campaign);
         let mut community = self.community(&campaign.community_id);
-        // Contributions stay cumulative; the refund is counted once, as
-        // spent (total_refunds), exactly like cancel_campaign does.
+        // The refund is counted once in total_refunds, when this
+        // payment is initiated; the callback decrements it again if
+        // the transfer fails. (Cancelled campaigns count differently:
+        // only at claim payment, see claim_refund.)
         community.total_refunds = community
             .total_refunds
             .checked_add(amount)
@@ -407,9 +614,104 @@ impl Contract {
             .sum();
         community.set_capital_points(&contributor, total_contributed);
         self.save_community(&community);
-        let _ = Promise::new(contributor.clone()).transfer(NearToken::from_yoctonear(amount));
+        let _ = Promise::new(contributor.clone())
+            .transfer(NearToken::from_yoctonear(amount))
+            .then(
+                Self::ext(env::current_account_id()).on_refund_complete(
+                    campaign_id.clone(),
+                    contributor.clone(),
+                    U128(amount),
+                ),
+            );
         events::emit(
             "refunded",
+            near_sdk::serde_json::json!({
+                "campaign_id": campaign_id,
+                "contributor": contributor.to_string(),
+                "amount": amount.to_string(),
+            }),
+        );
+    }
+
+    /// Callback for one individual refund transfer. Private: only the
+    /// contract itself may call it. On failure the contribution is
+    /// restored so the member can retry. A direct call (no promise
+    /// results) is a no-op.
+    #[private]
+    pub fn on_refund_complete(
+        &mut self,
+        campaign_id: String,
+        contributor: AccountId,
+        amount: U128,
+    ) {
+        if env::promise_results_count() == 0 {
+            return;
+        }
+        if env::promise_result_checked(0, 100).is_err() {
+            self.revert_failed_refund(&campaign_id, &contributor, amount.0);
+        }
+    }
+
+    /// Restore a failed individual refund: the contributor entry goes
+    /// back, raised is restored, total_refunds is decremented, and
+    /// capital points are recomputed from the restored cumulative
+    /// total — the exact mirror of refund(). Idempotent: if the
+    /// contributor is already listed (already restored) nothing
+    /// changes. If the campaign has moved on (funded, acquired, or
+    /// cancelled) or refilling it would push raised past the target,
+    /// the money is never lost: it is recorded as a claimable refund
+    /// instead (locked funds, collectable via claim_refund) and
+    /// total_refunds is still decremented, since nothing was paid.
+    /// Extracted so unit tests can drive it directly (the mock
+    /// blockchain carries no promise results).
+    fn revert_failed_refund(
+        &mut self,
+        campaign_id: &str,
+        contributor: &AccountId,
+        amount: u128,
+    ) {
+        let mut campaign = match self.campaigns.get(campaign_id) {
+            Some(c) => c.clone(),
+            None => return,
+        };
+        if campaign.contributors.iter().any(|(a, _)| a == contributor) {
+            return;
+        }
+        let mut community = self.community(&campaign.community_id);
+        if campaign.status == CampaignStatus::Open
+            && campaign
+                .raised
+                .checked_add(amount)
+                .map_or(false, |r| r <= campaign.target)
+        {
+            campaign.contributors.push((contributor.clone(), amount));
+            campaign.raised = campaign
+                .raised
+                .checked_add(amount)
+                .expect("raised overflow");
+            self.save_campaign(&campaign);
+        } else {
+            if campaign.refund_claims.iter().any(|(a, _)| a == contributor) {
+                return;
+            }
+            campaign.refund_claims.push((contributor.clone(), amount));
+            self.save_campaign(&campaign);
+        }
+        community.total_refunds = community.total_refunds.saturating_sub(amount);
+        // Recompute capital points from the restored cumulative total
+        // (the claim path leaves the contributor list untouched, so
+        // the total is unchanged there — the recompute is a no-op).
+        let campaigns = self.community_campaigns(&community);
+        let total_contributed: u128 = campaigns
+            .iter()
+            .flat_map(|c| c.contributors.iter())
+            .filter(|(a, _)| *a == *contributor)
+            .map(|(_, v)| *v)
+            .sum();
+        community.set_capital_points(contributor, total_contributed);
+        self.save_community(&community);
+        events::emit(
+            "refund_failed",
             near_sdk::serde_json::json!({
                 "campaign_id": campaign_id,
                 "contributor": contributor.to_string(),
@@ -423,13 +725,17 @@ impl Contract {
     /// Record revenue for an asset. The status is derived from the
     /// attached deposit, never chosen by the caller:
     /// * Onchain: attached == amount + 0.01 NEAR storage, amount > 0.
-    ///   Anyone may call (it is real money in). The entry is verified on
-    ///   record and the recorder earns work points at once (record +
-    ///   per-NEAR points from the activity policy), if they are a member.
+    ///   Anyone may call (it is real money in). The entry means
+    ///   "deposit confirmed", never "asset-generated": a deposit proves
+    ///   money moved, not that the asset earned it, so it earns NO work
+    ///   points (points_awarded is always 0). It still counts as
+    ///   revenue money: total_revenue and distributable rise by the
+    ///   amount.
     /// * Reported: attached == 0.01 NEAR storage, amount > 0. Community
     ///   members only. The entry starts Pending, earns no points, and is
     ///   labelled "Reported — not independently verified" until a
-    ///   different member attests it.
+    ///   different member attests it. Work points come ONLY from
+    ///   attested reported revenue (attest_revenue).
     /// The evidence reference is required and unique per asset: a second
     /// entry with the same reference is rejected.
     #[payable]
@@ -460,18 +766,15 @@ impl Contract {
                 "onchain revenue must attach amount + 0.01 NEAR storage; reported revenue must attach exactly 0.01 NEAR storage",
             );
         };
-        let mut points_awarded = 0;
+        let points_awarded = 0;
         if status == RevenueStatus::Onchain {
             community.total_revenue = community
                 .total_revenue
                 .checked_add(amount)
                 .expect("total revenue overflow");
-            // Verified at record time: the deposit is the verification.
-            // Work points are awarded exactly once, tied to this entry.
-            if community.is_member(&caller()) {
-                points_awarded = community.work_points_for(amount);
-                asset.add_work_points(&caller(), points_awarded);
-            }
+            // A deposit proves money moved, not that the asset earned
+            // it: no work points are awarded here, for anyone. Work
+            // points come only from attested reported revenue.
         }
         community.storage_reserve += STORAGE_RECORD;
         asset.revenue.push(RevenueEntry {
@@ -484,6 +787,7 @@ impl Contract {
             attestor: None,
             verified_at: None,
             points_awarded,
+            epoch: asset.epoch,
             bond_attestor: None,
             bond_status: None,
         });
@@ -518,6 +822,9 @@ impl Contract {
         let mut asset = self.asset(&asset_id);
         let mut community = self.community(&asset.community_id);
         require_member(&caller(), &community.members);
+        // The epoch in which the points are awarded: capture it before
+        // the entry borrow below.
+        let epoch = asset.epoch;
         // Scope the entry borrow: it must end before the asset's work
         // points are updated below.
         let (recorder, points) = {
@@ -533,6 +840,7 @@ impl Contract {
             entry.attestor = Some(caller());
             entry.verified_at = Some(env::block_timestamp());
             entry.points_awarded = points;
+            entry.epoch = epoch;
             entry.bond_attestor = Some(caller());
             entry.bond_status = Some(BondStatus::Held);
             (entry.recorded_by.clone(), points)
@@ -561,7 +869,11 @@ impl Contract {
     /// and the attestor may call it within the dispute window (from
     /// attestation). The entry becomes Disputed and its work points are
     /// suspended: removed from the recorder's current-epoch points,
-    /// floored at 0. A distribution already paid is never re-run.
+    /// floored at 0. The suspension is epoch-scoped: if the entry's
+    /// epoch already closed (a distribution ran since), suspending is a
+    /// no-op — the points are already consumed or reset, and the
+    /// dispute must not dock the member's new-epoch points. A
+    /// distribution already paid is never re-run.
     /// Attaches exactly 0.01 NEAR storage.
     #[payable]
     pub fn dispute_revenue(&mut self, asset_id: String, entry_id: u64) {
@@ -569,7 +881,7 @@ impl Contract {
         let mut asset = self.asset(&asset_id);
         let community = self.community(&asset.community_id);
         require_member(&caller(), &community.members);
-        let (recorder, points) = {
+        let (recorder, points, entry_epoch) = {
             let entry = asset
                 .revenue
                 .get_mut(entry_id as usize)
@@ -588,10 +900,11 @@ impl Contract {
             );
             let recorder = entry.recorded_by.clone();
             let points = entry.points_awarded;
+            let entry_epoch = entry.epoch;
             entry.status = RevenueStatus::Disputed;
-            (recorder, points)
+            (recorder, points, entry_epoch)
         };
-        asset.suspend_work_points(&recorder, points);
+        asset.suspend_work_points(&recorder, points, entry_epoch);
         let mut community = community;
         community.storage_reserve += STORAGE_RECORD;
         self.save_community(&community);
@@ -615,13 +928,19 @@ impl Contract {
     /// * uphold = false: the verification stands. The entry returns to
     ///   Verified, the suspended points are restored, and the bond is
     ///   returned to the attestor.
+    /// Both point changes are epoch-scoped (see assets.rs): if the
+    /// entry's epoch already closed — a distribution ran between the
+    /// dispute and this resolution — uphold only rejects the entry and
+    /// forfeits the bond with NO point changes, and reject only
+    /// re-verifies the entry with NO restore. Paid money is never
+    /// re-run, and new-epoch points are never docked or double-paid.
     #[payable]
     pub fn resolve_dispute(&mut self, asset_id: String, entry_id: u64, uphold: bool) {
         self.require_attached(STORAGE_RECORD);
         let mut asset = self.asset(&asset_id);
         let mut community = self.community(&asset.community_id);
         require_dao(&caller(), &community.dao_id);
-        let (recorder, points, bond_attestor) = {
+        let (recorder, points, entry_epoch, bond_attestor) = {
             let entry = asset
                 .revenue
                 .get_mut(entry_id as usize)
@@ -629,6 +948,7 @@ impl Contract {
             assert_eq!(entry.status, RevenueStatus::Disputed, "only a disputed entry can be resolved");
             let recorder = entry.recorded_by.clone();
             let points = entry.points_awarded;
+            let entry_epoch = entry.epoch;
             let bond_attestor = entry.bond_attestor.clone().expect("disputed entry has no bond");
             if uphold {
                 entry.status = RevenueStatus::Rejected;
@@ -637,7 +957,7 @@ impl Contract {
                 entry.status = RevenueStatus::Verified;
                 entry.bond_status = Some(BondStatus::Released);
             }
-            (recorder, points, bond_attestor)
+            (recorder, points, entry_epoch, bond_attestor)
         };
         if uphold {
             // The forfeited bond enters the treasury as revenue: it is
@@ -657,7 +977,7 @@ impl Contract {
                 .total_bonds_held
                 .saturating_sub(ATTESTATION_BOND);
         } else {
-            asset.restore_work_points(&recorder, points);
+            asset.restore_work_points(&recorder, points, entry_epoch);
             let _ = Promise::new(bond_attestor.clone())
                 .transfer(NearToken::from_yoctonear(ATTESTATION_BOND))
                 .then(
@@ -737,6 +1057,9 @@ impl Contract {
     /// exactly 0.01 NEAR storage. Enforcement order, before any transfer:
     /// the locked-funds guard, then the spending policy if the DAO set one
     /// (single-expense cap, treasury reserve floor, allowed category).
+    /// The transfer carries a callback: if it fails, the expense entry
+    /// is removed and total_expenses decremented, so the DAO can retry
+    /// and the ledger never counts a failed transfer as spent.
     #[payable]
     pub fn pay_expense(
         &mut self,
@@ -779,6 +1102,9 @@ impl Contract {
             .checked_add(amount)
             .expect("total expenses overflow");
         community.storage_reserve += STORAGE_RECORD;
+        // The entry's index identifies it to the callback: expenses are
+        // only ever appended, so the index stays valid.
+        let expense_index = asset.expenses.len() as u64;
         asset.expenses.push(ExpenseEntry {
             amount,
             recipient: recipient.clone(),
@@ -788,9 +1114,78 @@ impl Contract {
         });
         self.save_community(&community);
         self.save_asset(&asset);
-        let _ = Promise::new(recipient.clone()).transfer(NearToken::from_yoctonear(amount));
+        let _ = Promise::new(recipient.clone())
+            .transfer(NearToken::from_yoctonear(amount))
+            .then(
+                Self::ext(env::current_account_id()).on_expense_complete(
+                    asset_id.clone(),
+                    expense_index,
+                    recipient.clone(),
+                    U128(amount),
+                ),
+            );
         events::emit(
             "expense_paid",
+            near_sdk::serde_json::json!({
+                "asset_id": asset_id,
+                "amount": amount.to_string(),
+                "recipient": recipient.to_string(),
+            }),
+        );
+    }
+
+    /// Callback for one expense transfer. Private: only the contract
+    /// itself may call it, as the continuation of the transfer promise.
+    /// On failure the expense entry is removed and total_expenses
+    /// decremented so the DAO can retry. A direct call (no promise
+    /// results) is a no-op.
+    #[private]
+    pub fn on_expense_complete(
+        &mut self,
+        asset_id: String,
+        expense_index: u64,
+        recipient: AccountId,
+        amount: U128,
+    ) {
+        if env::promise_results_count() == 0 {
+            return;
+        }
+        if env::promise_result_checked(0, 100).is_err() {
+            self.revert_failed_expense(&asset_id, expense_index, &recipient, amount.0);
+        }
+    }
+
+    /// Remove a failed expense entry and decrement total_expenses.
+    /// The entry at the recorded index must still match the amount
+    /// and recipient — if it does not, the entry was already reverted
+    /// (or superseded) and nothing changes. Idempotent. Extracted so
+    /// unit tests can drive it directly (the mock blockchain carries
+    /// no promise results).
+    fn revert_failed_expense(
+        &mut self,
+        asset_id: &str,
+        expense_index: u64,
+        recipient: &AccountId,
+        amount: u128,
+    ) {
+        let mut asset = match self.assets.get(asset_id) {
+            Some(a) => a.clone(),
+            None => return,
+        };
+        let entry = match asset.expenses.get(expense_index as usize) {
+            Some(e) => e.clone(),
+            None => return,
+        };
+        if entry.amount != amount || entry.recipient != *recipient {
+            return;
+        }
+        asset.expenses.remove(expense_index as usize);
+        self.save_asset(&asset);
+        let mut community = self.community(&asset.community_id);
+        community.total_expenses = community.total_expenses.saturating_sub(amount);
+        self.save_community(&community);
+        events::emit(
+            "expense_failed",
             near_sdk::serde_json::json!({
                 "asset_id": asset_id,
                 "amount": amount.to_string(),
@@ -945,21 +1340,36 @@ impl Contract {
     }
 
     fn validate_params(&self, policy_type: &PolicyType, params: &PolicyParams) {
+        // ONE shared validation path for deserialized input (the same
+        // one create_community uses): serde bypasses constructors, so
+        // a direct contract call must be checked here.
         match (policy_type, params) {
             (
                 PolicyType::Distribution,
                 PolicyParams::Distribution { members_bp, treasury_bp, maintenance_bp, activity_bp },
             ) => {
-                DistributionPolicy::new_with_activity(*members_bp, *treasury_bp, *maintenance_bp, *activity_bp);
+                validate_distribution_policy(*members_bp, *treasury_bp, *maintenance_bp, *activity_bp);
             }
             (
                 PolicyType::Spending,
-                PolicyParams::Spending { .. },
-            ) => {}
+                PolicyParams::Spending { max_single_expense, min_treasury_reserve, allowed_categories },
+            ) => {
+                validate_spending_policy(&SpendingPolicy {
+                    max_single_expense: *max_single_expense,
+                    min_treasury_reserve: *min_treasury_reserve,
+                    allowed_categories: allowed_categories.clone(),
+                });
+            }
             (
                 PolicyType::Activity,
-                PolicyParams::Activity { .. },
-            ) => {}
+                PolicyParams::Activity { capital_per_near, work_per_revenue_record, work_per_revenue_near },
+            ) => {
+                validate_activity_policy(&ActivityPolicy {
+                    capital_per_near: *capital_per_near,
+                    work_per_revenue_record: *work_per_revenue_record,
+                    work_per_revenue_near: *work_per_revenue_near,
+                });
+            }
             _ => env::panic_str("policy type and parameters do not match"),
         }
     }
@@ -981,6 +1391,14 @@ impl Contract {
                 PolicyType::Spending,
                 PolicyParams::Spending { max_single_expense, min_treasury_reserve, allowed_categories },
             ) => {
+                // Re-validated here as well as at proposal time: an
+                // amendment recorded before this validation existed
+                // must not be able to apply an invalid policy.
+                validate_spending_policy(&SpendingPolicy {
+                    max_single_expense: *max_single_expense,
+                    min_treasury_reserve: *min_treasury_reserve,
+                    allowed_categories: allowed_categories.clone(),
+                });
                 community.spending_policy = SpendingPolicy {
                     max_single_expense: *max_single_expense,
                     min_treasury_reserve: *min_treasury_reserve,
@@ -991,6 +1409,11 @@ impl Contract {
                 PolicyType::Activity,
                 PolicyParams::Activity { capital_per_near, work_per_revenue_record, work_per_revenue_near },
             ) => {
+                validate_activity_policy(&ActivityPolicy {
+                    capital_per_near: *capital_per_near,
+                    work_per_revenue_record: *work_per_revenue_record,
+                    work_per_revenue_near: *work_per_revenue_near,
+                });
                 community.activity_policy = ActivityPolicy {
                     capital_per_near: *capital_per_near,
                     work_per_revenue_record: *work_per_revenue_record,
@@ -1234,6 +1657,9 @@ pub struct CampaignView {
     pub raised: U128,
     pub contributors: Vec<(AccountId, U128)>,
     pub status: String,
+    /// Outstanding claimable refunds, per contributor (cancelled
+    /// campaigns; unclaimed amounts are locked funds).
+    pub refund_claims: Vec<(AccountId, U128)>,
     pub deadline: u64,
 }
 
@@ -1311,6 +1737,9 @@ pub struct RevenueEntryView {
     pub attestor: Option<AccountId>,
     pub verified_at: Option<u64>,
     pub points_awarded: u64,
+    /// The epoch in which the entry's points were awarded (record
+    /// epoch for Onchain entries, attestation epoch for reported ones).
+    pub epoch: u64,
     pub bond_status: Option<BondStatus>,
 }
 
@@ -1502,6 +1931,11 @@ impl Contract {
             raised: U128(c.raised),
             contributors: c.contributors.into_iter().map(|(a, v)| (a, U128(v))).collect(),
             status: format!("{:?}", c.status),
+            refund_claims: c
+                .refund_claims
+                .into_iter()
+                .map(|(a, v)| (a, U128(v)))
+                .collect(),
             deadline: c.deadline,
         }
     }
@@ -1578,6 +2012,7 @@ impl Contract {
                 attestor: e.attestor.clone(),
                 verified_at: e.verified_at,
                 points_awarded: e.points_awarded,
+                epoch: e.epoch,
                 bond_status: e.bond_status.clone(),
             })
             .collect()
@@ -2169,21 +2604,46 @@ mod tests {
     }
 
     #[test]
-    fn cancel_refunds_once_and_treasury_zero() {
+    fn cancel_records_claims_and_claims_pay_out() {
         let (mut c, campaign_id) = setup_funded();
-        // Cancel while funded: full refund.
+        // Cancel while funded: NO transfers are pushed. The full 10
+        // NEAR is recorded as claimable refunds and counts as LOCKED
+        // funds, so the treasury still shows 10 NEAR but spendable is
+        // 0 — and total_refunds is still 0, because refunds count at
+        // claim payment, not at cancel time.
         testing_env!(ctx(DAO, STORAGE_RECORD, T0).build());
         c.cancel_campaign(campaign_id.clone());
+        let t = c.get_treasury("lagos-energy".to_string());
+        assert_eq!(t.treasury.0, 10 * NEAR);
+        assert_eq!(t.locked.0, 10 * NEAR);
+        assert_eq!(t.spendable.0, 0);
+        assert_eq!(t.total_refunds.0, 0);
+        let camp = c.get_campaign(campaign_id.clone());
+        assert_eq!(camp.status, "Cancelled");
+        assert_eq!(camp.refund_claims.len(), 4);
+        // Second cancel is rejected.
+        testing_env!(ctx(DAO, STORAGE_RECORD, T0).build());
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            c.cancel_campaign(campaign_id.clone());
+        }));
+        assert!(result.is_err());
+        // Each contributor claims their 2.5 NEAR; total_refunds grows
+        // per claim and the treasury falls.
+        for m in ["alice.testnet", "bob.testnet", "carol.testnet", "dave.testnet"] {
+            testing_env!(ctx(m, STORAGE_RECORD, T0).build());
+            c.claim_refund(campaign_id.clone());
+        }
         let t = c.get_treasury("lagos-energy".to_string());
         assert_eq!(t.treasury.0, 0);
         assert_eq!(t.total_refunds.0, 10 * NEAR);
         assert_eq!(t.locked.0, 0);
+        assert_eq!(t.spendable.0, 0);
         let camp = c.get_campaign(campaign_id.clone());
-        assert_eq!(camp.status, "Cancelled");
-        // Second cancel is rejected.
-        testing_env!(ctx(DAO, STORAGE_RECORD, T0).build());
+        assert!(camp.refund_claims.is_empty());
+        // A second claim is rejected: nothing left to claim.
+        testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0).build());
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            c.cancel_campaign(campaign_id);
+            c.claim_refund(campaign_id);
         }));
         assert!(result.is_err());
     }
@@ -2316,28 +2776,34 @@ mod tests {
     }
 
     #[test]
-    fn onchain_revenue_awards_work_points_by_formula() {
+    fn onchain_revenue_awards_no_work_points() {
+        // A deposit proves money moved, not that the asset earned it:
+        // onchain revenue earns NO work points, for anyone. It still
+        // counts as revenue money.
         let (mut c, campaign_id) = setup_funded();
         let asset_id = acquire(&mut c, &campaign_id);
-        // 3 NEAR onchain by alice: 1 record point + 3 per-NEAR = 4.
+        // 3 NEAR onchain by alice: 0 points.
         testing_env!(ctx("alice.testnet", 3 * NEAR + STORAGE_RECORD, T0).build());
         c.record_revenue(asset_id.clone(), U128(3 * NEAR), "rental".to_string(), "inv-1".to_string());
-        // 0.5 NEAR onchain by bob: 1 + 0 = 1 (no whole NEAR).
+        // 0.5 NEAR onchain by bob: 0 points.
         testing_env!(ctx("bob.testnet", NEAR / 2 + STORAGE_RECORD, T0).build());
         c.record_revenue(asset_id.clone(), U128(NEAR / 2), "rental".to_string(), "inv-2".to_string());
         // A non-member may deposit onchain revenue but earns no points.
         testing_env!(ctx("outsider.testnet", NEAR + STORAGE_RECORD, T0).build());
         c.record_revenue(asset_id.clone(), U128(NEAR), "rental".to_string(), "inv-3".to_string());
         let activity = c.get_activity(asset_id.clone());
-        let work = |a: &str| activity.work_points.iter().find(|(x, _)| x.as_str() == a).map(|(_, p)| (p.current, p.lifetime)).unwrap_or((0, 0));
-        assert_eq!(work("alice.testnet"), (4, 4));
-        assert_eq!(work("bob.testnet"), (1, 1));
-        assert_eq!(work("outsider.testnet"), (0, 0));
-        // The entry records the points awarded, exactly once.
+        assert!(activity
+            .work_points
+            .iter()
+            .all(|(_, p)| p.current == 0 && p.lifetime == 0));
+        // The entries record 0 points awarded.
         let entries = c.get_revenue(asset_id);
-        assert_eq!(entries[0].points_awarded, 4);
-        assert_eq!(entries[1].points_awarded, 1);
-        assert_eq!(entries[2].points_awarded, 0);
+        assert!(entries.iter().all(|e| e.points_awarded == 0));
+        assert!(entries.iter().all(|e| e.status == "Onchain"));
+        // But the money still counts: 4.5 NEAR of revenue.
+        let t = c.get_treasury("lagos-energy".to_string());
+        assert_eq!(t.total_revenue.0, 45 * NEAR / 10);
+        assert_eq!(t.treasury.0, 45 * NEAR / 10);
     }
 
     #[test]
@@ -2605,9 +3071,10 @@ mod tests {
         testing_env!(ctx(DAO, STORAGE_RECORD, T0).build());
         c.pay_expense(asset_id.clone(), U128(NEAR / 2), acc("bob.testnet"), "fuel".to_string(), "operations".to_string());
         // Founding policy is 60/25/15, activity 10%. No set call exists.
-        // Execute: D = 2.5, M = 1.5, A = 0.15, O = 1.35. Alice holds all
-        // 4 work points (3 NEAR onchain: 1 + 3), so she takes the whole
-        // activity pool: alice 0.4875, others 0.3375 each.
+        // Execute: D = 2.5, M = 1.5. The 3 NEAR was an onchain deposit,
+        // so nobody holds work points: the activity slice falls back
+        // to ownership (activity pool 0, ownership pool 1.5) and each
+        // of the four equal owners gets 0.375.
         testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0).build());
         let view = c.execute_distribution(asset_id.clone());
         assert_eq!(view.distributed.0, 25 * NEAR / 10);
@@ -2615,15 +3082,15 @@ mod tests {
         assert_eq!(view.retention.0, 625 * NEAR / 1000);
         assert_eq!(view.maintenance.0, 375 * NEAR / 1000);
         let payout_of = |a: &str| view.payouts.iter().find(|(x, _)| x.as_str() == a).unwrap().1 .0;
-        assert_eq!(payout_of("alice.testnet"), 487_500_000_000_000_000_000_000u128);
-        assert_eq!(payout_of("bob.testnet"), 337_500_000_000_000_000_000_000u128);
+        assert_eq!(payout_of("alice.testnet"), 375_000_000_000_000_000_000_000u128);
+        assert_eq!(payout_of("bob.testnet"), 375_000_000_000_000_000_000_000u128);
         // Ownership and activity parts are separate in the record.
         let act = |a: &str| view.activity_payouts.iter().find(|(x, _)| x.as_str() == a).map(|(_, p)| p.0).unwrap_or(0);
-        assert_eq!(act("alice.testnet"), 150_000_000_000_000_000_000_000u128);
+        assert_eq!(act("alice.testnet"), 0);
         assert_eq!(act("bob.testnet"), 0);
-        assert_eq!(view.activity_pool.0, 150_000_000_000_000_000_000_000u128);
-        assert_eq!(view.ownership_pool.0, 1_350_000_000_000_000_000_000_000u128);
-        assert_eq!(view.total_work_points, 4);
+        assert_eq!(view.activity_pool.0, 0);
+        assert_eq!(view.ownership_pool.0, 1_500_000_000_000_000_000_000_000u128);
+        assert_eq!(view.total_work_points, 0);
         assert_eq!(
             view.member_total.0 + view.retention.0 + view.maintenance.0,
             view.distributed.0
@@ -2639,9 +3106,9 @@ mod tests {
             c.execute_distribution(asset_id.clone());
         }));
         assert!(result.is_err());
-        // New revenue 1 NEAR by alice. Her first-epoch points were reset,
-        // so she earns 2 fresh points (1 + 1) and takes the whole 0.06
-        // activity pool again: alice 0.195, others 0.135 each.
+        // New revenue 1 NEAR by alice (onchain deposit: still 0 work
+        // points). The second distribution splits D = 1 by ownership
+        // only: each member 0.15.
         testing_env!(ctx("alice.testnet", NEAR + STORAGE_RECORD, T0).build());
         c.record_revenue(asset_id.clone(), U128(NEAR), "rental".to_string(), "inv-2".to_string());
         testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0).build());
@@ -2649,8 +3116,8 @@ mod tests {
         assert_eq!(view2.distributed.0, NEAR);
         assert_eq!(view2.member_total.0, 6 * NEAR / 10);
         let payout2 = |a: &str| view2.payouts.iter().find(|(x, _)| x.as_str() == a).unwrap().1 .0;
-        assert_eq!(payout2("alice.testnet"), 195_000_000_000_000_000_000_000u128);
-        assert_eq!(payout2("bob.testnet"), 135_000_000_000_000_000_000_000u128);
+        assert_eq!(payout2("alice.testnet"), 150_000_000_000_000_000_000_000u128);
+        assert_eq!(payout2("bob.testnet"), 150_000_000_000_000_000_000_000u128);
         let t = c.get_treasury("lagos-energy".to_string());
         assert_eq!(t.total_payouts.0, 21 * NEAR / 10);
         assert_eq!(t.treasury.0, 14 * NEAR / 10);
@@ -2677,8 +3144,8 @@ mod tests {
             c.contribute(campaign2.clone());
         }
         let asset2 = acquire(&mut c, &campaign2);
-        // Revenue 10 on asset 1 (alice earns 11 work points), expense 5
-        // on asset 2.
+        // Revenue 10 on asset 1 (onchain deposit: 0 work points),
+        // expense 5 on asset 2.
         testing_env!(ctx("alice.testnet", 10 * NEAR + STORAGE_RECORD, T0).build());
         c.record_revenue(asset1.clone(), U128(10 * NEAR), "rental".to_string(), "inv-1".to_string());
         testing_env!(ctx(DAO, STORAGE_RECORD, T0).build());
@@ -2687,11 +3154,11 @@ mod tests {
         testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0).build());
         let view = c.execute_distribution(asset1.clone());
         assert_eq!(view.distributed.0, 5 * NEAR);
-        // Alice takes the whole 0.3 NEAR activity pool (11/11 points):
-        // alice 0.975, others 0.675 each. Member total is 3 NEAR.
+        // No work points stand, so the whole 3 NEAR member pool goes by
+        // ownership: each of the four equal owners gets 0.75.
         let payout_of = |a: &str| view.payouts.iter().find(|(x, _)| x.as_str() == a).unwrap().1 .0;
-        assert_eq!(payout_of("alice.testnet"), 975_000_000_000_000_000_000_000u128);
-        assert_eq!(payout_of("bob.testnet"), 675_000_000_000_000_000_000_000u128);
+        assert_eq!(payout_of("alice.testnet"), 750_000_000_000_000_000_000_000u128);
+        assert_eq!(payout_of("bob.testnet"), 750_000_000_000_000_000_000_000u128);
         assert_eq!(view.member_total.0, 3 * NEAR);
         // Second call: community net exhausted -> D = 0, rejected.
         testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0).build());
@@ -2717,7 +3184,7 @@ mod tests {
         assert_eq!(a.value.0, 10 * NEAR);
         assert_eq!(a.allocations.len(), 4);
         assert_eq!(a.epoch, 0);
-        // 3 NEAR onchain revenue by alice: 4 work points.
+        // 3 NEAR onchain revenue by alice: a deposit, so 0 work points.
         testing_env!(ctx("alice.testnet", 3 * NEAR + STORAGE_RECORD, T0).build());
         c.record_revenue(asset_id.clone(), U128(3 * NEAR), "generator rental".to_string(), "invoice-001".to_string());
         // 1 NEAR reported revenue by bob, attested by alice: bob earns
@@ -2732,10 +3199,12 @@ mod tests {
         testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0).build());
         let view = c.execute_distribution(asset_id.clone());
         assert_eq!(view.distributed.0, 25 * NEAR / 10);
-        // Alice 0.4375, bob 0.3875, carol and dave 0.3375 each.
+        // Bob holds the only work points (2), so he takes the whole
+        // 0.15 activity pool: alice 0.3375, bob 0.4875, carol and dave
+        // 0.3375 each.
         let payout_of = |a: &str| view.payouts.iter().find(|(x, _)| x.as_str() == a).unwrap().1 .0;
-        assert_eq!(payout_of("alice.testnet"), 437_500_000_000_000_000_000_000u128);
-        assert_eq!(payout_of("bob.testnet"), 387_500_000_000_000_000_000_000u128);
+        assert_eq!(payout_of("alice.testnet"), 337_500_000_000_000_000_000_000u128);
+        assert_eq!(payout_of("bob.testnet"), 487_500_000_000_000_000_000_000u128);
         assert_eq!(payout_of("carol.testnet"), 337_500_000_000_000_000_000_000u128);
         assert_eq!(payout_of("dave.testnet"), 337_500_000_000_000_000_000_000u128);
         assert_eq!(view.member_total.0, 15 * NEAR / 10);
@@ -2764,7 +3233,7 @@ mod tests {
         assert_eq!(activity.epoch, 1);
         assert!(activity.work_points.iter().all(|(_, p)| p.current == 0));
         let lifetime = |a: &str| activity.work_points.iter().find(|(x, _)| x.as_str() == a).map(|(_, p)| p.lifetime).unwrap_or(0);
-        assert_eq!(lifetime("alice.testnet"), 4);
+        assert_eq!(lifetime("alice.testnet"), 0, "onchain deposits earn no lifetime points");
         assert_eq!(lifetime("bob.testnet"), 2);
         // The breakdown view lets any member recompute their payout.
         let b = c.get_distribution_breakdown(0, acc("alice.testnet"));
@@ -2773,11 +3242,16 @@ mod tests {
         assert_eq!(b.activity_pool.0, 150_000_000_000_000_000_000_000u128);
         assert_eq!(b.ownership_pool.0, 1_350_000_000_000_000_000_000_000u128);
         assert_eq!(b.member_allocation_bp, 2500);
-        assert_eq!(b.member_work_points, 4);
-        assert_eq!(b.total_work_points, 6);
+        assert_eq!(b.member_work_points, 0);
+        assert_eq!(b.total_work_points, 2);
         assert_eq!(b.ownership_payout.0, 337_500_000_000_000_000_000_000u128);
-        assert_eq!(b.activity_payout.0, 100_000_000_000_000_000_000_000u128);
-        assert_eq!(b.total_payout.0, 437_500_000_000_000_000_000_000u128);
+        assert_eq!(b.activity_payout.0, 0);
+        assert_eq!(b.total_payout.0, 337_500_000_000_000_000_000_000u128);
+        let bb = c.get_distribution_breakdown(0, acc("bob.testnet"));
+        assert_eq!(bb.member_work_points, 2);
+        assert_eq!(bb.ownership_payout.0, 337_500_000_000_000_000_000_000u128);
+        assert_eq!(bb.activity_payout.0, 150_000_000_000_000_000_000_000u128);
+        assert_eq!(bb.total_payout.0, 487_500_000_000_000_000_000_000u128);
         let stats = c.get_stats();
         assert_eq!(stats.community_count, 1);
         assert_eq!(stats.campaign_count, 1);
@@ -2834,8 +3308,10 @@ mod tests {
 
     #[test]
     fn circular_farming_loses_money_and_epochs_reset() {
-        // Alice deposits 3 NEAR of revenue and cycles it: she recovers
-        // only her ownership + activity share, less than the deposit.
+        // Alice deposits 3 NEAR of revenue and cycles it: an onchain
+        // deposit earns no work points, so she recovers only her 25%
+        // ownership share of the member pool (0.45), far less than the
+        // 3 NEAR deposit.
         let (mut c, campaign_id) = setup_funded();
         let asset_id = acquire(&mut c, &campaign_id);
         testing_env!(ctx("alice.testnet", 3 * NEAR + STORAGE_RECORD, T0).build());
@@ -2843,16 +3319,23 @@ mod tests {
         testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0).build());
         let view = c.execute_distribution(asset_id.clone());
         let alice_first = view.payouts.iter().find(|(x, _)| x.as_str() == "alice.testnet").unwrap().1 .0;
-        assert_eq!(alice_first, 585_000_000_000_000_000_000_000u128);
+        assert_eq!(alice_first, 450_000_000_000_000_000_000_000u128);
         assert!(alice_first < 3 * NEAR, "cycling capital must lose money");
-        // Epoch reset: alice's first-epoch points are gone. New activity
-        // by bob only: the next distribution's activity slice goes to
+        // Epoch reset: the epoch advanced and the current points are 0.
+        // New verified activity by bob only, in the new epoch: bob
+        // deposits 1 NEAR onchain (the money for D = 1) and records
+        // 1 NEAR reported revenue, attested by alice, earning 2 fresh
+        // work points. The next distribution's activity slice goes to
         // bob alone, and alice gets ownership only.
         let activity = c.get_activity(asset_id.clone());
         assert_eq!(activity.epoch, 1);
         assert!(activity.work_points.iter().all(|(_, p)| p.current == 0));
         testing_env!(ctx("bob.testnet", NEAR + STORAGE_RECORD, T0).build());
         c.record_revenue(asset_id.clone(), U128(NEAR), "rental".to_string(), "inv-2".to_string());
+        testing_env!(ctx("bob.testnet", STORAGE_RECORD, T0).build());
+        c.record_revenue(asset_id.clone(), U128(NEAR), "cash".to_string(), "rep-1".to_string());
+        testing_env!(ctx("alice.testnet", ATTESTATION_BOND + STORAGE_RECORD, T0).build());
+        c.attest_revenue(asset_id.clone(), 2);
         testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0).build());
         let view2 = c.execute_distribution(asset_id);
         let act2 = |a: &str| view2.activity_payouts.iter().find(|(x, _)| x.as_str() == a).map(|(_, p)| p.0).unwrap_or(0);
@@ -2876,17 +3359,19 @@ mod tests {
         testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0).build());
         let view = c.execute_distribution(asset_id.clone());
         assert_eq!(view.id, 0);
-        // Alice's 0.4875 NEAR transfer fails: reconcile it.
-        c.reconcile_failed_payout(0, acc("alice.testnet"), 487_500_000_000_000_000_000_000u128);
+        // Alice's 0.375 NEAR transfer fails: reconcile it. (No work
+        // points stand — the revenue was an onchain deposit — so each
+        // of the four equal owners gets 0.375.)
+        c.reconcile_failed_payout(0, acc("alice.testnet"), 375_000_000_000_000_000_000_000u128);
         let record = c.get_distribution(asset_id.clone(), 0);
         assert_eq!(record.unpaid, vec![acc("alice.testnet")]);
         assert_eq!(record.member_total.0, 15 * NEAR / 10, "the recorded totals never change");
         let t = c.get_treasury("lagos-energy".to_string());
-        assert_eq!(t.total_payouts.0, 15 * NEAR / 10 - 487_500_000_000_000_000_000_000u128);
+        assert_eq!(t.total_payouts.0, 15 * NEAR / 10 - 375_000_000_000_000_000_000_000u128);
         // The credited-back amount is distributable again.
         testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0).build());
         let view2 = c.execute_distribution(asset_id);
-        assert_eq!(view2.distributed.0, 487_500_000_000_000_000_000_000u128);
+        assert_eq!(view2.distributed.0, 375_000_000_000_000_000_000_000u128);
     }
 
     #[test]
@@ -2901,7 +3386,7 @@ mod tests {
         c.execute_distribution(asset_id);
         // Callbacks are private: only the contract itself may call them.
         testing_env!(ctx("ownground.testnet", 0, T0).build());
-        c.on_payout_complete(0, acc("alice.testnet"), U128(585_000_000_000_000_000_000_000u128));
+        c.on_payout_complete(0, acc("alice.testnet"), U128(450_000_000_000_000_000_000_000u128));
         let t = c.get_treasury("lagos-energy".to_string());
         assert_eq!(t.total_payouts.0, 18 * NEAR / 10);
     }
@@ -3077,8 +3562,13 @@ mod tests {
         testing_env!(ctx("alice.testnet", 25 * NEAR / 10 + STORAGE_RECORD, T0).build());
         c.contribute(campaign_id.clone());
         let asset_id = acquire(&mut c, &campaign_id);
-        testing_env!(ctx("alice.testnet", 3 * NEAR + STORAGE_RECORD, T0).build());
+        // Alice records 3 NEAR reported revenue; bob attests it, so
+        // alice earns 3 + 2 x 3 = 9 work points under the custom
+        // weights. (An onchain deposit would earn 0.)
+        testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0).build());
         c.record_revenue(asset_id.clone(), U128(3 * NEAR), "rental".to_string(), "inv-1".to_string());
+        testing_env!(ctx("bob.testnet", ATTESTATION_BOND + STORAGE_RECORD, T0).build());
+        c.attest_revenue(asset_id.clone(), 0);
         let v = c.get_community("lagos-energy".to_string());
         // 2.5 NEAR contributed: floor(2.5) = 2 whole NEAR x 2 = 4 points.
         assert_eq!(v.capital_points.iter().find(|(x, _)| x.as_str() == "alice.testnet").unwrap().1, 4);
@@ -3321,5 +3811,655 @@ mod tests {
         c.contribute(campaign_id.clone());
         testing_env!(ctx("bob.testnet", STORAGE_RECORD, T0).build());
         c.refund(campaign_id);
+    }
+
+    // -- Transfer callbacks (failed transfers revert) ---------------------
+
+    #[test]
+    fn failed_acquire_reverts_and_retry_succeeds() {
+        // Simulate a failed seller transfer by calling the revert
+        // directly (the mock blockchain carries no promise results).
+        let (mut c, campaign_id) = setup_funded();
+        let asset_id = acquire(&mut c, &campaign_id);
+        assert_eq!(c.get_campaign(campaign_id.clone()).status, "Acquired");
+        c.revert_failed_acquire(&campaign_id, &asset_id, &acc(SELLER), 10 * NEAR);
+        // Campaign back to Funded, asset removed, acquisitions 0.
+        assert_eq!(c.get_campaign(campaign_id.clone()).status, "Funded");
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            c.get_asset(asset_id.clone());
+        }));
+        assert!(result.is_err(), "the asset record is removed");
+        let t = c.get_treasury("lagos-energy".to_string());
+        assert_eq!(t.total_acquisitions.0, 0);
+        assert_eq!(t.treasury.0, 10 * NEAR);
+        assert_eq!(t.locked.0, 10 * NEAR, "the funded campaign locks its raised again");
+        // Reverting twice is a no-op (idempotent).
+        c.revert_failed_acquire(&campaign_id, &asset_id, &acc(SELLER), 10 * NEAR);
+        assert_eq!(c.get_campaign(campaign_id.clone()).status, "Funded");
+        // Retry: the DAO acquires again; a fresh asset id is created.
+        let asset_id2 = acquire(&mut c, &campaign_id);
+        assert_ne!(asset_id2, asset_id);
+        assert_eq!(c.get_campaign(campaign_id).status, "Acquired");
+        assert_eq!(c.get_asset(asset_id2).value.0, 10 * NEAR);
+        let t = c.get_treasury("lagos-energy".to_string());
+        assert_eq!(t.total_acquisitions.0, 10 * NEAR);
+    }
+
+    #[test]
+    fn acquire_callback_with_no_results_is_a_noop() {
+        // The mock blockchain carries no promise results, so the
+        // callback returns without reverting anything.
+        let (mut c, campaign_id) = setup_funded();
+        let asset_id = acquire(&mut c, &campaign_id);
+        testing_env!(ctx("ownground.testnet", 0, T0).build());
+        c.on_acquire_complete(campaign_id.clone(), asset_id.clone(), acc(SELLER), U128(10 * NEAR));
+        assert_eq!(c.get_campaign(campaign_id).status, "Acquired");
+        assert_eq!(c.get_asset(asset_id).value.0, 10 * NEAR);
+    }
+
+    #[test]
+    fn failed_expense_reverts_and_retry_succeeds() {
+        let (mut c, asset_id) = setup_with_spending_policy();
+        testing_env!(ctx(DAO, STORAGE_RECORD, T0).build());
+        c.pay_expense(asset_id.clone(), U128(NEAR / 2), acc("bob.testnet"), "fuel".to_string(), "operations".to_string());
+        assert_eq!(c.get_expenses(asset_id.clone()).len(), 1);
+        // Simulate the failed transfer.
+        c.revert_failed_expense(&asset_id, 0, &acc("bob.testnet"), NEAR / 2);
+        assert_eq!(c.get_expenses(asset_id.clone()).len(), 0);
+        let t = c.get_treasury("lagos-energy".to_string());
+        assert_eq!(t.total_expenses.0, 0);
+        assert_eq!(t.treasury.0, 3 * NEAR);
+        // Reverting twice is a no-op.
+        c.revert_failed_expense(&asset_id, 0, &acc("bob.testnet"), NEAR / 2);
+        assert_eq!(c.get_expenses(asset_id.clone()).len(), 0);
+        // Retry: the same expense succeeds.
+        testing_env!(ctx(DAO, STORAGE_RECORD, T0).build());
+        c.pay_expense(asset_id.clone(), U128(NEAR / 2), acc("bob.testnet"), "fuel".to_string(), "operations".to_string());
+        assert_eq!(c.get_expenses(asset_id).len(), 1);
+        let t = c.get_treasury("lagos-energy".to_string());
+        assert_eq!(t.total_expenses.0, NEAR / 2);
+    }
+
+    #[test]
+    fn expense_callback_with_no_results_is_a_noop() {
+        let (mut c, asset_id) = setup_with_spending_policy();
+        testing_env!(ctx(DAO, STORAGE_RECORD, T0).build());
+        c.pay_expense(asset_id.clone(), U128(NEAR / 2), acc("bob.testnet"), "fuel".to_string(), "operations".to_string());
+        testing_env!(ctx("ownground.testnet", 0, T0).build());
+        c.on_expense_complete(asset_id.clone(), 0, acc("bob.testnet"), U128(NEAR / 2));
+        assert_eq!(c.get_expenses(asset_id).len(), 1);
+        let t = c.get_treasury("lagos-energy".to_string());
+        assert_eq!(t.total_expenses.0, NEAR / 2);
+    }
+
+    /// An open campaign with a single 2.5 NEAR contribution by alice.
+    fn setup_open_refund() -> (Contract, String) {
+        let mut c = Contract::new();
+        create_test_community(&mut c, "lagos-energy");
+        testing_env!(ctx("alice.testnet", STORAGE_CREATE_CAMPAIGN, T0).build());
+        let campaign_id = c.create_campaign(
+            "lagos-energy".to_string(),
+            "Generator".to_string(),
+            "energy".to_string(),
+            U128(10 * NEAR),
+            DEADLINE,
+        );
+        testing_env!(ctx("alice.testnet", 25 * NEAR / 10 + STORAGE_RECORD, T0).build());
+        c.contribute(campaign_id.clone());
+        (c, campaign_id)
+    }
+
+    #[test]
+    fn failed_refund_restores_contribution_and_retry_succeeds() {
+        let (mut c, campaign_id) = setup_open_refund();
+        testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0).build());
+        c.refund(campaign_id.clone());
+        let camp = c.get_campaign(campaign_id.clone());
+        assert_eq!(camp.raised.0, 0);
+        let t = c.get_treasury("lagos-energy".to_string());
+        assert_eq!(t.total_refunds.0, 25 * NEAR / 10);
+        // Simulate the failed transfer: the contribution is restored.
+        c.revert_failed_refund(&campaign_id, &acc("alice.testnet"), 25 * NEAR / 10);
+        let camp = c.get_campaign(campaign_id.clone());
+        assert_eq!(camp.raised.0, 25 * NEAR / 10);
+        assert_eq!(camp.contributors.len(), 1);
+        let t = c.get_treasury("lagos-energy".to_string());
+        assert_eq!(t.total_refunds.0, 0);
+        let v = c.get_community("lagos-energy".to_string());
+        assert_eq!(v.capital_points.iter().find(|(x, _)| x.as_str() == "alice.testnet").unwrap().1, 2);
+        // Reverting twice is a no-op.
+        c.revert_failed_refund(&campaign_id, &acc("alice.testnet"), 25 * NEAR / 10);
+        assert_eq!(c.get_campaign(campaign_id.clone()).raised.0, 25 * NEAR / 10);
+        // Retry: the refund succeeds.
+        testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0).build());
+        c.refund(campaign_id.clone());
+        assert_eq!(c.get_campaign(campaign_id).raised.0, 0);
+        let t = c.get_treasury("lagos-energy".to_string());
+        assert_eq!(t.total_refunds.0, 25 * NEAR / 10);
+    }
+
+    #[test]
+    fn refund_callback_with_no_results_is_a_noop() {
+        let (mut c, campaign_id) = setup_open_refund();
+        testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0).build());
+        c.refund(campaign_id.clone());
+        testing_env!(ctx("ownground.testnet", 0, T0).build());
+        c.on_refund_complete(campaign_id.clone(), acc("alice.testnet"), U128(25 * NEAR / 10));
+        assert_eq!(c.get_campaign(campaign_id).raised.0, 0);
+        let t = c.get_treasury("lagos-energy".to_string());
+        assert_eq!(t.total_refunds.0, 25 * NEAR / 10);
+    }
+
+    #[test]
+    fn failed_refund_after_campaign_funded_becomes_claim() {
+        // Alice refunds 2.5 NEAR from an open campaign; before the
+        // callback lands, others fill the campaign to its 10 NEAR
+        // target, so restoring her contribution would exceed the
+        // target. The money is never lost: it becomes a claimable
+        // refund (locked funds) she collects via claim_refund.
+        let (mut c, campaign_id) = setup_open_refund();
+        testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0).build());
+        c.refund(campaign_id.clone());
+        testing_env!(ctx("bob.testnet", 5 * NEAR + STORAGE_RECORD, T0).build());
+        c.contribute(campaign_id.clone());
+        testing_env!(ctx("carol.testnet", 5 * NEAR + STORAGE_RECORD, T0).build());
+        c.contribute(campaign_id.clone());
+        assert_eq!(c.get_campaign(campaign_id.clone()).status, "Funded");
+        // Simulate the failed transfer.
+        c.revert_failed_refund(&campaign_id, &acc("alice.testnet"), 25 * NEAR / 10);
+        let camp = c.get_campaign(campaign_id.clone());
+        assert_eq!(camp.refund_claims.len(), 1);
+        assert_eq!(camp.refund_claims[0].1 .0, 25 * NEAR / 10);
+        let t = c.get_treasury("lagos-energy".to_string());
+        assert_eq!(t.total_refunds.0, 0, "nothing was paid");
+        assert_eq!(t.treasury.0, 125 * NEAR / 10);
+        assert_eq!(t.locked.0, 125 * NEAR / 10, "funded raised 10 + claim 2.5");
+        assert_eq!(t.spendable.0, 0);
+        // Alice claims it.
+        testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0).build());
+        c.claim_refund(campaign_id.clone());
+        let t = c.get_treasury("lagos-energy".to_string());
+        assert_eq!(t.total_refunds.0, 25 * NEAR / 10);
+        assert_eq!(t.treasury.0, 10 * NEAR);
+        assert_eq!(t.locked.0, 10 * NEAR);
+    }
+
+    #[test]
+    fn failed_claim_refund_restores_claim_and_retry_succeeds() {
+        let (mut c, campaign_id) = setup_funded();
+        testing_env!(ctx(DAO, STORAGE_RECORD, T0).build());
+        c.cancel_campaign(campaign_id.clone());
+        // Alice claims her 2.5 NEAR.
+        testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0).build());
+        c.claim_refund(campaign_id.clone());
+        let t = c.get_treasury("lagos-energy".to_string());
+        assert_eq!(t.total_refunds.0, 25 * NEAR / 10);
+        assert_eq!(t.treasury.0, 75 * NEAR / 10);
+        assert_eq!(t.locked.0, 75 * NEAR / 10);
+        // Simulate the failed transfer: the claim is restored.
+        c.revert_failed_claim_refund(&campaign_id, &acc("alice.testnet"), 25 * NEAR / 10);
+        let camp = c.get_campaign(campaign_id.clone());
+        assert_eq!(camp.refund_claims.len(), 4);
+        let t = c.get_treasury("lagos-energy".to_string());
+        assert_eq!(t.total_refunds.0, 0);
+        assert_eq!(t.treasury.0, 10 * NEAR);
+        assert_eq!(t.locked.0, 10 * NEAR);
+        // Reverting twice is a no-op.
+        c.revert_failed_claim_refund(&campaign_id, &acc("alice.testnet"), 25 * NEAR / 10);
+        assert_eq!(c.get_campaign(campaign_id.clone()).refund_claims.len(), 4);
+        // Retry: the claim succeeds.
+        testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0).build());
+        c.claim_refund(campaign_id.clone());
+        let t = c.get_treasury("lagos-energy".to_string());
+        assert_eq!(t.total_refunds.0, 25 * NEAR / 10);
+        assert_eq!(c.get_campaign(campaign_id).refund_claims.len(), 3);
+    }
+
+    #[test]
+    fn claim_callback_with_no_results_is_a_noop() {
+        let (mut c, campaign_id) = setup_funded();
+        testing_env!(ctx(DAO, STORAGE_RECORD, T0).build());
+        c.cancel_campaign(campaign_id.clone());
+        testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0).build());
+        c.claim_refund(campaign_id.clone());
+        testing_env!(ctx("ownground.testnet", 0, T0).build());
+        c.on_claim_refund_complete(campaign_id.clone(), acc("alice.testnet"), U128(25 * NEAR / 10));
+        assert_eq!(c.get_campaign(campaign_id).refund_claims.len(), 3);
+        let t = c.get_treasury("lagos-energy".to_string());
+        assert_eq!(t.total_refunds.0, 25 * NEAR / 10);
+    }
+
+    #[test]
+    fn cancelled_claims_block_spending() {
+        // Two campaigns: campaign 1 funds and acquires the generator;
+        // campaign 2 holds a 2.5 NEAR open contribution. After the
+        // generator earns 3 NEAR onchain and campaign 2 is cancelled,
+        // its 2.5 NEAR claim is locked: the DAO cannot spend it, even
+        // though the treasury holds 5.5 NEAR.
+        let (mut c, campaign1) = setup_funded();
+        testing_env!(ctx("alice.testnet", STORAGE_CREATE_CAMPAIGN, T0).build());
+        let campaign2 = c.create_campaign(
+            "lagos-energy".to_string(),
+            "Van".to_string(),
+            "transport".to_string(),
+            U128(10 * NEAR),
+            DEADLINE,
+        );
+        testing_env!(ctx("alice.testnet", 25 * NEAR / 10 + STORAGE_RECORD, T0).build());
+        c.contribute(campaign2.clone());
+        let asset_id = acquire(&mut c, &campaign1);
+        testing_env!(ctx("alice.testnet", 3 * NEAR + STORAGE_RECORD, T0).build());
+        c.record_revenue(asset_id.clone(), U128(3 * NEAR), "rental".to_string(), "inv-1".to_string());
+        testing_env!(ctx(DAO, STORAGE_RECORD, T0).build());
+        c.cancel_campaign(campaign2.clone());
+        let t = c.get_treasury("lagos-energy".to_string());
+        assert_eq!(t.treasury.0, 55 * NEAR / 10);
+        assert_eq!(t.locked.0, 25 * NEAR / 10, "the unclaimed refund is locked");
+        assert_eq!(t.spendable.0, 3 * NEAR);
+        // A 3.5 NEAR expense exceeds the 3 NEAR spendable: rejected,
+        // even though the raw treasury is 5.5 NEAR.
+        testing_env!(ctx(DAO, STORAGE_RECORD, T0).build());
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            c.pay_expense(asset_id.clone(), U128(35 * NEAR / 10), acc("bob.testnet"), "repairs".to_string(), "maintenance".to_string());
+        }));
+        assert!(result.is_err());
+        // A 0.5 NEAR expense fits the spendable and succeeds.
+        testing_env!(ctx(DAO, STORAGE_RECORD, T0).build());
+        c.pay_expense(asset_id.clone(), U128(NEAR / 2), acc("bob.testnet"), "fuel".to_string(), "operations".to_string());
+        let t = c.get_treasury("lagos-energy".to_string());
+        assert_eq!(t.total_expenses.0, NEAR / 2);
+        // The claim is still payable afterwards: the money was never spent.
+        testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0).build());
+        c.claim_refund(campaign2);
+        let t = c.get_treasury("lagos-energy".to_string());
+        assert_eq!(t.total_refunds.0, 25 * NEAR / 10);
+        assert_eq!(t.locked.0, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "caller has no claimable refund")]
+    fn claim_refund_by_non_claimant_rejected() {
+        let (mut c, campaign_id) = setup_funded();
+        testing_env!(ctx(DAO, STORAGE_RECORD, T0).build());
+        c.cancel_campaign(campaign_id.clone());
+        testing_env!(ctx("outsider.testnet", STORAGE_RECORD, T0).build());
+        c.claim_refund(campaign_id);
+    }
+
+    // -- Policy validation (shared path: create + amendment) -------------
+
+    fn create_community_with(
+        c: &mut Contract,
+        id: &str,
+        distribution: DistributionPolicy,
+        spending: SpendingPolicy,
+        activity: ActivityPolicy,
+        dispute_window_ns: Option<u64>,
+        timelock_ns: Option<u64>,
+    ) {
+        testing_env!(ctx("alice.testnet", STORAGE_CREATE_COMMUNITY, T0).build());
+        c.create_community(
+            id.to_string(),
+            "X".to_string(),
+            "".to_string(),
+            acc(DAO),
+            members(),
+            distribution,
+            spending,
+            activity,
+            dispute_window_ns,
+            timelock_ns,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "policy shares must sum to exactly 10000")]
+    fn create_community_rejects_invalid_distribution() {
+        let mut c = Contract::new();
+        create_community_with(
+            &mut c,
+            "x",
+            DistributionPolicy { members_bp: 6000, treasury_bp: 2500, maintenance_bp: 1501, activity_bp: 1000 },
+            demo_spending(),
+            ActivityPolicy::default(),
+            None,
+            None,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "activity_bp must be between 0 and 10000")]
+    fn create_community_rejects_activity_bp_over_10000() {
+        let mut c = Contract::new();
+        create_community_with(
+            &mut c,
+            "x",
+            DistributionPolicy { members_bp: 6000, treasury_bp: 2500, maintenance_bp: 1500, activity_bp: 10_001 },
+            demo_spending(),
+            ActivityPolicy::default(),
+            None,
+            None,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "must allow at least one category")]
+    fn create_community_rejects_empty_spending_categories() {
+        let mut c = Contract::new();
+        create_community_with(
+            &mut c,
+            "x",
+            demo_distribution(),
+            SpendingPolicy { max_single_expense: U128(0), min_treasury_reserve: U128(0), allowed_categories: vec![] },
+            ActivityPolicy::default(),
+            None,
+            None,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "duplicate spending category")]
+    fn create_community_rejects_duplicate_spending_category() {
+        let mut c = Contract::new();
+        create_community_with(
+            &mut c,
+            "x",
+            demo_distribution(),
+            SpendingPolicy {
+                max_single_expense: U128(0),
+                min_treasury_reserve: U128(0),
+                allowed_categories: vec!["operations".to_string(), "operations".to_string()],
+            },
+            ActivityPolicy::default(),
+            None,
+            None,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "spending category must not be empty")]
+    fn create_community_rejects_empty_spending_category() {
+        let mut c = Contract::new();
+        create_community_with(
+            &mut c,
+            "x",
+            demo_distribution(),
+            SpendingPolicy {
+                max_single_expense: U128(0),
+                min_treasury_reserve: U128(0),
+                allowed_categories: vec!["operations".to_string(), "   ".to_string()],
+            },
+            ActivityPolicy::default(),
+            None,
+            None,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "at most 64 characters")]
+    fn create_community_rejects_long_spending_category() {
+        let mut c = Contract::new();
+        create_community_with(
+            &mut c,
+            "x",
+            demo_distribution(),
+            SpendingPolicy {
+                max_single_expense: U128(0),
+                min_treasury_reserve: U128(0),
+                allowed_categories: vec!["a".repeat(65)],
+            },
+            ActivityPolicy::default(),
+            None,
+            None,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "at most 20 categories")]
+    fn create_community_rejects_too_many_spending_categories() {
+        let mut c = Contract::new();
+        create_community_with(
+            &mut c,
+            "x",
+            demo_distribution(),
+            SpendingPolicy {
+                max_single_expense: U128(0),
+                min_treasury_reserve: U128(0),
+                allowed_categories: (0..21).map(|i| format!("cat-{}", i)).collect(),
+            },
+            ActivityPolicy::default(),
+            None,
+            None,
+        );
+    }
+
+    #[test]
+    fn create_community_rejects_oversized_activity_weights() {
+        // Each weight above 1,000,000 is rejected, whichever it is.
+        for (capital, record, per_near) in [
+            (1_000_001, 1, 1),
+            (1, 1_000_001, 1),
+            (1, 1, 1_000_001),
+        ] {
+            let mut c = Contract::new();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                create_community_with(
+                    &mut c,
+                    "x",
+                    demo_distribution(),
+                    demo_spending(),
+                    ActivityPolicy { capital_per_near: capital, work_per_revenue_record: record, work_per_revenue_near: per_near },
+                    None,
+                    None,
+                );
+            }));
+            assert!(result.is_err(), "weight {:?} must be rejected", (capital, record, per_near));
+        }
+        // Exactly 1,000,000 is allowed.
+        let mut c = Contract::new();
+        create_community_with(
+            &mut c,
+            "x",
+            demo_distribution(),
+            demo_spending(),
+            ActivityPolicy { capital_per_near: 1_000_000, work_per_revenue_record: 1_000_000, work_per_revenue_near: 1_000_000 },
+            None,
+            None,
+        );
+        assert_eq!(c.get_community("x".to_string()).activity_policy.capital_per_near, 1_000_000);
+    }
+
+    #[test]
+    #[should_panic(expected = "must be between 60 seconds and 365 days")]
+    fn create_community_rejects_zero_timelock() {
+        let mut c = Contract::new();
+        create_community_with(&mut c, "x", demo_distribution(), demo_spending(), ActivityPolicy::default(), None, Some(0));
+    }
+
+    #[test]
+    #[should_panic(expected = "must be between 60 seconds and 365 days")]
+    fn create_community_rejects_zero_dispute_window() {
+        let mut c = Contract::new();
+        create_community_with(&mut c, "x", demo_distribution(), demo_spending(), ActivityPolicy::default(), Some(0), None);
+    }
+
+    #[test]
+    fn create_community_rejects_over_max_time_windows() {
+        // 366 days exceeds the 365-day maximum, for either window.
+        let over_max = 366 * 24 * 60 * 60 * 1_000_000_000u64;
+        let mut c = Contract::new();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            create_community_with(&mut c, "x", demo_distribution(), demo_spending(), ActivityPolicy::default(), None, Some(over_max));
+        }));
+        assert!(result.is_err(), "over-max timelock must be rejected");
+        let mut c = Contract::new();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            create_community_with(&mut c, "x", demo_distribution(), demo_spending(), ActivityPolicy::default(), Some(over_max), None);
+        }));
+        assert!(result.is_err(), "over-max dispute window must be rejected");
+    }
+
+    #[test]
+    fn create_community_accepts_time_window_bounds() {
+        // Both bounds are inclusive: 60 seconds and 365 days pass.
+        // The demo's own values (120s timelock, 300s dispute window)
+        // sit inside the bounds.
+        let mut c = Contract::new();
+        create_community_with(
+            &mut c,
+            "min",
+            demo_distribution(),
+            demo_spending(),
+            ActivityPolicy::default(),
+            Some(60 * 1_000_000_000),
+            Some(60 * 1_000_000_000),
+        );
+        create_community_with(
+            &mut c,
+            "max",
+            demo_distribution(),
+            demo_spending(),
+            ActivityPolicy::default(),
+            Some(365 * 24 * 60 * 60 * 1_000_000_000),
+            Some(365 * 24 * 60 * 60 * 1_000_000_000),
+        );
+        create_community_with(
+            &mut c,
+            "demo",
+            demo_distribution(),
+            demo_spending(),
+            ActivityPolicy::default(),
+            Some(300_000_000_000),
+            Some(120_000_000_000),
+        );
+        assert_eq!(c.get_community("min".to_string()).timelock_ns, 60 * 1_000_000_000);
+        assert_eq!(c.get_community("max".to_string()).timelock_ns, 365 * 24 * 60 * 60 * 1_000_000_000);
+        assert_eq!(c.get_community("demo".to_string()).dispute_window_ns, 300_000_000_000);
+    }
+
+    #[test]
+    #[should_panic(expected = "duplicate spending category")]
+    fn amendment_rejects_invalid_spending_params() {
+        let (mut c, _) = setup_funded();
+        testing_env!(ctx(DAO, STORAGE_RECORD, T0).build());
+        c.propose_policy_change(
+            "lagos-energy".to_string(),
+            PolicyType::Spending,
+            PolicyParams::Spending {
+                max_single_expense: U128(NEAR),
+                min_treasury_reserve: U128(0),
+                allowed_categories: vec!["operations".to_string(), "operations".to_string()],
+            },
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "must be at most 1000000")]
+    fn amendment_rejects_oversized_activity_params() {
+        let (mut c, _) = setup_funded();
+        testing_env!(ctx(DAO, STORAGE_RECORD, T0).build());
+        c.propose_policy_change(
+            "lagos-energy".to_string(),
+            PolicyType::Activity,
+            PolicyParams::Activity { capital_per_near: 1, work_per_revenue_record: 1_000_001, work_per_revenue_near: 1 },
+        );
+    }
+
+    // -- Epoch-safe disputes -----------------------------------------------
+    //
+    // Full sequence: dispute -> distribution -> new activity ->
+    // resolution, both upheld and rejected. A resolution after the
+    // distribution must never touch current-epoch points: no docking
+    // of new-epoch points on uphold, no double-pay on reject.
+
+    /// Dispute bob's attested entry, then distribute (3 NEAR onchain)
+    /// and give bob 2 fresh work points in the new epoch. Returns the
+    /// contract and asset id with the dispute still open.
+    fn setup_dispute_then_distribution() -> (Contract, String) {
+        let (mut c, asset_id) = setup_attested();
+        testing_env!(ctx("carol.testnet", STORAGE_RECORD, T0 + 24 * 60 * 60 * 1_000_000_000).build());
+        c.dispute_revenue(asset_id.clone(), 0);
+        // 3 NEAR onchain revenue (0 points) funds a distribution.
+        testing_env!(ctx("alice.testnet", 3 * NEAR + STORAGE_RECORD, T0 + 24 * 60 * 60 * 1_000_000_000).build());
+        c.record_revenue(asset_id.clone(), U128(3 * NEAR), "rental".to_string(), "inv-1".to_string());
+        testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0 + 24 * 60 * 60 * 1_000_000_000).build());
+        let view = c.execute_distribution(asset_id.clone());
+        assert_eq!(view.distributed.0, 3 * NEAR);
+        assert_eq!(c.get_asset(asset_id.clone()).epoch, 1);
+        // New verified activity in epoch 1: bob records 1 NEAR
+        // reported revenue, alice attests it — bob earns 2 fresh points.
+        testing_env!(ctx("bob.testnet", STORAGE_RECORD, T0 + 2 * 24 * 60 * 60 * 1_000_000_000).build());
+        c.record_revenue(asset_id.clone(), U128(NEAR), "cash".to_string(), "rep-2".to_string());
+        testing_env!(ctx("alice.testnet", ATTESTATION_BOND + STORAGE_RECORD, T0 + 2 * 24 * 60 * 60 * 1_000_000_000).build());
+        c.attest_revenue(asset_id.clone(), 2);
+        let activity = c.get_activity(asset_id.clone());
+        let work = activity.work_points.iter().find(|(x, _)| x.as_str() == "bob.testnet").map(|(_, p)| p.current).unwrap_or(0);
+        assert_eq!(work, 2, "bob holds 2 fresh epoch-1 points before resolution");
+        (c, asset_id)
+    }
+
+    #[test]
+    fn dispute_after_distribution_uphold_keeps_new_epoch_points() {
+        let (mut c, asset_id) = setup_dispute_then_distribution();
+        // The DAO upholds the old dispute: entry 0 is rejected and the
+        // bond forfeits — but bob's new-epoch points are untouched.
+        testing_env!(ctx(DAO, STORAGE_RECORD, T0 + 3 * 24 * 60 * 60 * 1_000_000_000).build());
+        c.resolve_dispute(asset_id.clone(), 0, true);
+        let entries = c.get_revenue(asset_id.clone());
+        assert_eq!(entries[0].status, "Rejected");
+        assert_eq!(entries[0].bond_status, Some(BondStatus::Forfeited));
+        assert_eq!(entries[2].status, "Verified", "the new entry stands");
+        let activity = c.get_activity(asset_id.clone());
+        let work = activity.work_points.iter().find(|(x, _)| x.as_str() == "bob.testnet").map(|(_, p)| p.current).unwrap_or(0);
+        assert_eq!(work, 2, "upholding an old dispute must not dock new-epoch points");
+        let t = c.get_treasury("lagos-energy".to_string());
+        assert_eq!(t.total_revenue.0, 3 * NEAR + ATTESTATION_BOND, "onchain 3 + forfeited bond 0.1");
+    }
+
+    #[test]
+    fn dispute_after_distribution_reject_does_not_double_pay() {
+        let (mut c, asset_id) = setup_dispute_then_distribution();
+        // The DAO rejects the old dispute: entry 0 is verified again
+        // and the bond is released — but bob's points are NOT restored
+        // on top of his new-epoch points (that would double-pay: 4).
+        testing_env!(ctx(DAO, STORAGE_RECORD, T0 + 3 * 24 * 60 * 60 * 1_000_000_000).build());
+        c.resolve_dispute(asset_id.clone(), 0, false);
+        let entries = c.get_revenue(asset_id.clone());
+        assert_eq!(entries[0].status, "Verified");
+        assert_eq!(entries[0].bond_status, Some(BondStatus::Released));
+        let activity = c.get_activity(asset_id.clone());
+        let work = activity.work_points.iter().find(|(x, _)| x.as_str() == "bob.testnet").map(|(_, p)| p.current).unwrap_or(0);
+        assert_eq!(work, 2, "rejecting an old dispute must not restore points into a new epoch");
+    }
+
+    #[test]
+    fn dispute_of_old_entry_in_new_epoch_does_not_suspend_new_points() {
+        // Bob's entry is attested in epoch 0; a distribution closes
+        // the epoch; bob earns 2 fresh points in epoch 1. Disputing
+        // the OLD entry now must not suspend the new points.
+        let (mut c, asset_id) = setup_attested();
+        testing_env!(ctx("alice.testnet", 3 * NEAR + STORAGE_RECORD, T0).build());
+        c.record_revenue(asset_id.clone(), U128(3 * NEAR), "rental".to_string(), "inv-1".to_string());
+        testing_env!(ctx("alice.testnet", STORAGE_RECORD, T0).build());
+        c.execute_distribution(asset_id.clone());
+        assert_eq!(c.get_asset(asset_id.clone()).epoch, 1);
+        testing_env!(ctx("bob.testnet", STORAGE_RECORD, T0 + 24 * 60 * 60 * 1_000_000_000).build());
+        c.record_revenue(asset_id.clone(), U128(NEAR), "cash".to_string(), "rep-2".to_string());
+        testing_env!(ctx("alice.testnet", ATTESTATION_BOND + STORAGE_RECORD, T0 + 24 * 60 * 60 * 1_000_000_000).build());
+        c.attest_revenue(asset_id.clone(), 2);
+        // Carol disputes the OLD entry 0 (still Verified, in window).
+        testing_env!(ctx("carol.testnet", STORAGE_RECORD, T0 + 2 * 24 * 60 * 60 * 1_000_000_000).build());
+        c.dispute_revenue(asset_id.clone(), 0);
+        let entries = c.get_revenue(asset_id.clone());
+        assert_eq!(entries[0].status, "Disputed");
+        let activity = c.get_activity(asset_id.clone());
+        let work = activity.work_points.iter().find(|(x, _)| x.as_str() == "bob.testnet").map(|(_, p)| p.current).unwrap_or(0);
+        assert_eq!(work, 2, "suspending an old-epoch entry must not dock new-epoch points");
+        // Upholding it forfeits the bond but still leaves the points.
+        testing_env!(ctx(DAO, STORAGE_RECORD, T0 + 3 * 24 * 60 * 60 * 1_000_000_000).build());
+        c.resolve_dispute(asset_id.clone(), 0, true);
+        let activity = c.get_activity(asset_id.clone());
+        let work = activity.work_points.iter().find(|(x, _)| x.as_str() == "bob.testnet").map(|(_, p)| p.current).unwrap_or(0);
+        assert_eq!(work, 2);
     }
 }

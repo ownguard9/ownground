@@ -9,6 +9,7 @@
 <script src="fastnear-wallet.bundle.js"></script>
 <script src="failure.js"></script>
 <script src="common.js"></script>
+<script src="dao.js"></script>
 </head>
 <body>
 <header class="top">
@@ -21,6 +22,7 @@
 </header>
 <main>
   <p id="pageStatus"></p>
+  <div id="proposalBox" class="panel" style="display:none"></div>
   <div id="notDeployed" class="panel" style="display:none">
     <p>The contract is not deployed yet. This page will load once it is live on testnet.</p>
   </div>
@@ -37,13 +39,13 @@
     <div id="revenueList"></div>
     <div class="panel">
       <h3>Record revenue</h3>
-      <p class="small muted">Onchain revenue attaches the amount plus 0.01 NEAR for storage and is verified at once. Reported revenue attaches 0.01 NEAR only, earns no points, and is labelled "Reported — not independently verified" until a different member attests it with a 0.1 NEAR bond. Every entry needs an evidence reference, and a reference cannot be used twice for this asset.</p>
+      <p class="small muted">Onchain revenue attaches the amount plus 0.01 NEAR for storage and the deposit is confirmed at once. Reported revenue attaches 0.01 NEAR only, earns no points, and is labelled "Reported — not independently verified" until a different member attests it with a 0.1 NEAR bond. Every entry needs an evidence reference, and a reference cannot be used twice for this asset.</p>
       <label>Amount in NEAR<input id="revAmount" placeholder="3"></label>
       <label>Source<input id="revSource" placeholder="Generator rental"></label>
       <label>Evidence reference<input id="revRef" placeholder="invoice-001"></label>
       <label>Kind
         <select id="revStatus">
-          <option value="Onchain">Onchain (deposit the amount, verified at once)</option>
+          <option value="Onchain">Onchain (deposit the amount, deposit confirmed at once)</option>
           <option value="Reported">Reported (no deposit, needs attestation)</option>
         </select>
       </label>
@@ -54,13 +56,13 @@
     <div id="expenseList"></div>
     <div class="panel">
       <h3>Pay an expense</h3>
-      <p class="small muted">DAO only. The locked funds guard runs first, then the spending policy if the community set one. Attaches 0.01 NEAR for storage.</p>
+      <p class="small muted">Only the DAO can pay an expense. This creates a DAO proposal; council members vote, then the DAO executes it. The locked funds guard runs first, then the spending policy if the community set one. The proposal attaches 0.01 NEAR for storage inside the DAO call.</p>
       <p class="small">Spending policy: <span id="spendingNow">none set yet</span></p>
       <label>Amount in NEAR<input id="expAmount" placeholder="0.5"></label>
       <label>Recipient account<input id="expRecipient" placeholder="bob.testnet"></label>
       <label>Description<input id="expDesc" placeholder="Fuel"></label>
       <label>Category<input id="expCat" placeholder="operations"></label>
-      <button onclick="payExpense()">Pay expense</button>
+      <button onclick="payExpense()">Propose expense payment (DAO)</button>
     </div>
 
     <h2>Distributions</h2>

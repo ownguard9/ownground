@@ -26,6 +26,93 @@ use near_sdk::AccountId;
 /// 1 NEAR in yoctoNEAR.
 pub const ONE_NEAR: u128 = 1_000_000_000_000_000_000_000_000;
 
+/// Largest allowed activity weight (capital_per_near,
+/// work_per_revenue_record, work_per_revenue_near). A weight above
+/// this is a misconfiguration, not a policy: it would let one entry
+/// mint unbounded work points.
+pub const MAX_ACTIVITY_WEIGHT: u64 = 1_000_000;
+/// Largest allowed number of spending categories.
+pub const MAX_SPENDING_CATEGORIES: usize = 20;
+/// Largest allowed spending category, in characters.
+pub const MAX_CATEGORY_LEN: usize = 64;
+/// Smallest allowed dispute window / timelock: 60 seconds, in
+/// nanoseconds. Zero (or anything shorter) would let a dispute or an
+/// amendment resolve before anyone can see it.
+pub const MIN_TIME_WINDOW_NS: u64 = 60 * 1_000_000_000;
+/// Largest allowed dispute window / timelock: 365 days, in nanoseconds.
+pub const MAX_TIME_WINDOW_NS: u64 = 365 * 24 * 60 * 60 * 1_000_000_000;
+
+/// Validate a distribution policy's shares. This is the ONE shared
+/// validation path for deserialized input: serde deserialization
+/// bypasses constructors, so a direct contract call must be checked
+/// here, never by trusting `DistributionPolicy::new_with_activity`
+/// to have run.
+pub fn validate_distribution_policy(
+    members_bp: u16,
+    treasury_bp: u16,
+    maintenance_bp: u16,
+    activity_bp: u16,
+) {
+    assert_eq!(
+        members_bp as u32 + treasury_bp as u32 + maintenance_bp as u32,
+        10_000,
+        "policy shares must sum to exactly 10000 basis points"
+    );
+    assert!(activity_bp <= 10_000, "activity_bp must be between 0 and 10000");
+}
+
+/// Validate a spending policy: the category list must be non-empty,
+/// every category a non-empty string of at most 64 characters, no
+/// duplicates, at most 20 categories. (The amounts —
+/// max_single_expense, min_treasury_reserve — carry no bound: 0 means
+/// "no cap" / "no floor" by design.)
+pub fn validate_spending_policy(policy: &SpendingPolicy) {
+    assert!(!policy.allowed_categories.is_empty(), "spending policy must allow at least one category");
+    assert!(
+        policy.allowed_categories.len() <= MAX_SPENDING_CATEGORIES,
+        "spending policy allows at most 20 categories"
+    );
+    let mut seen: Vec<&str> = Vec::new();
+    for category in &policy.allowed_categories {
+        let trimmed = category.trim();
+        assert!(!trimmed.is_empty(), "spending category must not be empty");
+        assert!(
+            trimmed.chars().count() <= MAX_CATEGORY_LEN,
+            "spending category must be at most 64 characters"
+        );
+        assert!(!seen.contains(&trimmed), "duplicate spending category");
+        seen.push(trimmed);
+    }
+}
+
+/// Validate an activity policy: every weight is at most 1,000,000.
+/// A weight of 0 disables that source of points.
+pub fn validate_activity_policy(policy: &ActivityPolicy) {
+    assert!(
+        policy.capital_per_near <= MAX_ACTIVITY_WEIGHT,
+        "capital_per_near must be at most 1000000"
+    );
+    assert!(
+        policy.work_per_revenue_record <= MAX_ACTIVITY_WEIGHT,
+        "work_per_revenue_record must be at most 1000000"
+    );
+    assert!(
+        policy.work_per_revenue_near <= MAX_ACTIVITY_WEIGHT,
+        "work_per_revenue_near must be at most 1000000"
+    );
+}
+
+/// Validate a dispute window / timelock: at least 60 seconds (0 is
+/// rejected — a zero window would close disputes and amendments
+/// before anyone can see them) and at most 365 days.
+pub fn validate_time_window(value_ns: u64, name: &str) {
+    assert!(
+        value_ns >= MIN_TIME_WINDOW_NS && value_ns <= MAX_TIME_WINDOW_NS,
+        "{} must be between 60 seconds and 365 days",
+        name
+    );
+}
+
 /// A distribution policy: three basis-point shares that must sum to
 /// exactly 10000, plus the activity slice. Set at creation; changed only
 /// by a policy amendment.
@@ -53,12 +140,7 @@ impl DistributionPolicy {
         maintenance_bp: u16,
         activity_bp: u16,
     ) -> Self {
-        assert_eq!(
-            members_bp as u32 + treasury_bp as u32 + maintenance_bp as u32,
-            10_000,
-            "policy shares must sum to exactly 10000 basis points"
-        );
-        assert!(activity_bp <= 10_000, "activity_bp must be between 0 and 10000");
+        validate_distribution_policy(members_bp, treasury_bp, maintenance_bp, activity_bp);
         Self { members_bp, treasury_bp, maintenance_bp, activity_bp }
     }
 }

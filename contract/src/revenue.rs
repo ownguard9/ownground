@@ -1,21 +1,30 @@
 //! Revenue module: income and expense records.
 //!
 //! Verification statuses, kept strictly apart:
-//! * `Onchain` — real NEAR was deposited with the record. Verified income.
-//!   Work points are awarded at record time.
+//! * `Onchain` — real NEAR was deposited with the record. It means
+//!   "deposit confirmed", never "asset-generated": a deposit proves
+//!   money moved, not that the asset earned it. Onchain entries earn
+//!   NO work points (points_awarded is always 0); they still count as
+//!   revenue money (total_revenue, distributable). Onchain entries
+//!   cannot be disputed: there is no attestor and no bond to forfeit.
 //! * `Pending` — no deposit; an offchain payment recorded as a ledger
 //!   entry. Labelled "Reported — not independently verified" everywhere
 //!   and never presented as verified income. Earns no points until a
 //!   different member attests it.
 //! * `Verified` — a reported entry attested by a different member, with a
-//!   0.1 NEAR bond held per entry. Work points are awarded at attestation.
+//!   0.1 NEAR bond held per entry. "Verified" is used ONLY for attested
+//!   entries. Work points are awarded at attestation.
 //! * `Disputed` — a member challenged the verification; the entry's work
 //!   points are suspended while disputed.
 //! * `Rejected` — the DAO upheld a dispute; the verification is overturned,
 //!   the points stay removed, and the attestor's bond goes to the treasury.
 //!
 //! Work points are awarded exactly once per entry, tied to the entry id:
-//! the entry records `points_awarded`, set once at verification.
+//! the entry records `points_awarded`, set once at verification
+//! (attestation). The entry also records `epoch`: the epoch in which
+//! its points were awarded, so a dispute resolved after a distribution
+//! can never suspend or restore points from an epoch that already
+//! closed (see assets.rs suspend/restore_work_points).
 
 use near_sdk::borsh::{BorshDeserialize, BorshSerialize};
 use near_sdk::serde::{Deserialize, Serialize};
@@ -57,9 +66,18 @@ pub struct RevenueEntry {
     /// Block timestamp (ns) of attestation, once attested. The dispute
     /// window runs from here.
     pub verified_at: Option<u64>,
-    /// Work points awarded for this entry (0 until verified). Set exactly
-    /// once, at verification.
+    /// Work points awarded for this entry (0 until verified, and
+    /// always 0 for Onchain entries — a deposit earns no points).
+    /// Set exactly once, at verification (attestation).
     pub points_awarded: u64,
+    /// The asset epoch in which this entry's points were awarded:
+    /// the record epoch for Onchain entries, the attestation epoch
+    /// for reported entries (set at record time, refreshed at
+    /// attestation in case the epoch advanced in between). Disputes
+    /// only suspend/restore points when this equals the asset's
+    /// current epoch; an entry from a closed epoch never touches
+    /// current-epoch points again.
+    pub epoch: u64,
     /// The member whose bond is held for this entry, once attested.
     pub bond_attestor: Option<AccountId>,
     /// Bond state, once attested.

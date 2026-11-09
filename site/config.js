@@ -6,9 +6,9 @@ window.BRAND_NAME = "OwnGround";
 // Public repo. The footer GitHub link reads this and nowhere else.
 window.REPO_URL = "https://github.com/ownguard9/ownguard";
 
-// Contract address. Empty until the contract is deployed to testnet;
-// the pages show a plain "not deployed yet" state until it is set.
-window.CONTRACT_ID = "ownground.testnet";
+// Contract address. v2 (remediation re-deploy) at ownground2.testnet.
+// v1 ownground.testnet is superseded — do not point the site at it.
+window.CONTRACT_ID = "ownground2.testnet";
 
 // Testnet only. Never point this at mainnet.
 window.NETWORK = "testnet";

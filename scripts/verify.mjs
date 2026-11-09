@@ -1,4 +1,6 @@
 // OwnGround keyless verifier.
+import fs from "node:fs";
+
 // Reads a deployed OwnGround contract over public testnet RPC and checks
 // the design invariants with real numbers. No key, no wallet, read only.
 //
@@ -185,7 +187,14 @@ async function runChecks(state) {
     const byMember = new Map();
     for (const r of rev) {
       byMember.set(r.recorded_by, (byMember.get(r.recorded_by) || 0n) + BigInt(r.points_awarded));
-      if (r.status === "Onchain" || r.status === "Verified") {
+      if (r.status === "Onchain") {
+        // v2: an onchain deposit proves money moved, not that the asset
+        // earned it — it awards NO work points (remediation fix).
+        check(`7 entry ${r.id} onchain deposit earns no points`,
+          BigInt(r.points_awarded) === 0n,
+          `${r.recorded_by} ${r.status} points=${r.points_awarded}`);
+      }
+      if (r.status === "Verified") {
         check(`7 entry ${r.id} points by formula`,
           BigInt(r.points_awarded) === workPointsFor(r.amount, policies.activity),
           `${r.recorded_by} ${r.status} points=${r.points_awarded} expected=${workPointsFor(r.amount, policies.activity)}`);
@@ -286,17 +295,20 @@ async function runChecks(state) {
 }
 
 function demoFixture() {
-  // Lagos Energy Cooperative, final state after the full demo flow
-  // (dispute upheld, amendment executed, one distribution).
+  // Lagos Energy Cooperative, final state after the full v2 demo flow
+  // (dispute upheld, amendment executed, one distribution; contract
+  // ownground2.testnet, community lagos-energy-cooperative-2). Values
+  // read back from the live v2 run: onchain deposits earn no points,
+  // activity pool 0 (no verified work stands), payouts 0.39 each.
   const community = {
-    id: "lagos-energy-cooperative",
+    id: "lagos-energy-cooperative-2",
     name: "Lagos Energy Cooperative",
-    dao_id: "lagos-energy.sputnikv2.testnet",
-    members: ["alice.testnet", "bob.testnet", "carol.testnet", "dave.testnet"],
+    dao_id: "lagos-energy2.testnet",
+    members: ["alice.ownground2.testnet", "bob.ownground2.testnet", "carol.ownground2.testnet", "dave.ownground2.testnet"],
     policy: { members_bp: 6000, treasury_bp: 2500, maintenance_bp: 1500, activity_bp: 1000 },
     spending_policy: { max_single_expense: (2n * N).toString(), min_treasury_reserve: N.toString(), allowed_categories: ["maintenance", "operations"] },
     activity_policy: { capital_per_near: 1, work_per_revenue_record: 1, work_per_revenue_near: 1 },
-    capital_points: [["alice.testnet", 2], ["bob.testnet", 2], ["carol.testnet", 2], ["dave.testnet", 2]],
+    capital_points: [["alice.ownground2.testnet", 2], ["bob.ownground2.testnet", 2], ["carol.ownground2.testnet", 2], ["dave.ownground2.testnet", 2]],
     campaign_ids: ["generator"],
     asset_ids: ["generator"],
     dispute_window_ns: 300000000000,
@@ -305,43 +317,42 @@ function demoFixture() {
     total_revenue: (31n * N / 10n).toString(),
     total_acquisitions: (10n * N).toString(),
     total_expenses: (5n * N / 10n).toString(),
-    total_payouts: (26n * N / 10n).toString(),
+    total_payouts: (156n * N / 100n).toString(),
     total_distributed: (26n * N / 10n).toString(),
     total_refunds: "0",
-    total_retained: (65n * N / 100n).toString(),
+    total_retained: (104n * N / 100n).toString(),
     total_bonds_held: "0",
-    storage_reserve: (16n * N / 100n).toString(),
+    storage_reserve: (29n * N / 100n).toString(),
   };
   const treasury = {
-    community_id: "lagos-energy-cooperative",
-    treasury: "0",
+    community_id: "lagos-energy-cooperative-2",
+    treasury: (104n * N / 100n).toString(),
     locked: "0",
-    spendable: "0",
+    spendable: (104n * N / 100n).toString(),
     total_revenue: (31n * N / 10n).toString(),
     total_expenses: (5n * N / 10n).toString(),
-    retained: (65n * N / 100n).toString(),
+    retained: (104n * N / 100n).toString(),
     distributable: "0",
     total_contributions: (10n * N).toString(),
     total_acquisitions: (10n * N).toString(),
-    total_payouts: (26n * N / 10n).toString(),
+    total_payouts: (156n * N / 100n).toString(),
     total_distributed: (26n * N / 10n).toString(),
     total_refunds: "0",
     total_bonds_held: "0",
-    storage_reserve: (16n * N / 100n).toString(),
+    storage_reserve: (29n * N / 100n).toString(),
   };
   const assetId = "generator";
   return {
     community,
     treasury,
-    campaigns: [{ id: "generator", community_id: "lagos-energy-cooperative", asset_name: "Generator", category: "energy", target: (10n * N).toString(), raised: (10n * N).toString(), contributors: [], status: "Acquired", deadline: 0 }],
+    campaigns: [{ id: "generator", community_id: "lagos-energy-cooperative-2", asset_name: "Generator", category: "energy", target: (10n * N).toString(), raised: (10n * N).toString(), contributors: [], status: "Acquired", deadline: 0 }],
     assets: [{
-      id: assetId, community_id: "lagos-energy-cooperative", name: "Generator", category: "energy",
+      id: assetId, community_id: "lagos-energy-cooperative-2", name: "Generator", category: "energy",
       value: (10n * N).toString(), seller: "demo-seller.testnet",
-      allocations: [["alice.testnet", 2500], ["bob.testnet", 2500], ["carol.testnet", 2500], ["dave.testnet", 2500]],
+      allocations: [["alice.ownground2.testnet", 2500], ["bob.ownground2.testnet", 2500], ["carol.ownground2.testnet", 2500], ["dave.ownground2.testnet", 2500]],
       status: "Active", created_at: 0, epoch: 1,
       work_points: [
-        ["alice.testnet", { current: 0, lifetime: 4 }],
-        ["bob.testnet", { current: 0, lifetime: 2 }],
+        ["bob.ownground2.testnet", { current: 0, lifetime: 2 }],
       ],
       distributed_total: (26n * N / 10n).toString(),
       revenue_onchain: (3n * N).toString(),
@@ -350,8 +361,8 @@ function demoFixture() {
     }],
     revenue: {
       [assetId]: [
-        { id: 0, amount: (3n * N).toString(), source: "Generator rental", reference: "invoice-001", status: "Onchain", recorded_at: 0, recorded_by: "alice.testnet", attestor: null, verified_at: 0, points_awarded: 4, bond_status: null },
-        { id: 1, amount: N.toString(), source: "Generator rental", reference: "invoice-002", status: "Rejected", recorded_at: 0, recorded_by: "bob.testnet", attestor: "alice.testnet", verified_at: 0, points_awarded: 2, bond_status: "Forfeited" },
+        { id: 0, amount: (3n * N).toString(), source: "Generator rental", reference: "invoice-001", status: "Onchain", recorded_at: 0, recorded_by: "alice.ownground2.testnet", attestor: null, verified_at: 0, points_awarded: 0, bond_status: null },
+        { id: 1, amount: N.toString(), source: "Generator rental", reference: "invoice-002", status: "Rejected", recorded_at: 0, recorded_by: "bob.ownground2.testnet", attestor: "alice.ownground2.testnet", verified_at: 0, points_awarded: 2, bond_status: "Forfeited" },
       ],
     },
     expenses: {
@@ -360,15 +371,15 @@ function demoFixture() {
     distributions: {
       [assetId]: [{
         id: 0, asset_id: assetId, distributed: (26n * N / 10n).toString(),
-        payouts: [["alice.testnet", (507n * N / 1000n).toString()], ["bob.testnet", (351n * N / 1000n).toString()], ["carol.testnet", (351n * N / 1000n).toString()], ["dave.testnet", (351n * N / 1000n).toString()]],
-        ownership_payouts: [["alice.testnet", (351n * N / 1000n).toString()], ["bob.testnet", (351n * N / 1000n).toString()], ["carol.testnet", (351n * N / 1000n).toString()], ["dave.testnet", (351n * N / 1000n).toString()]],
-        activity_payouts: [["alice.testnet", (156n * N / 1000n).toString()]],
+        payouts: [["alice.ownground2.testnet", (39n * N / 100n).toString()], ["bob.ownground2.testnet", (39n * N / 100n).toString()], ["carol.ownground2.testnet", (39n * N / 100n).toString()], ["dave.ownground2.testnet", (39n * N / 100n).toString()]],
+        ownership_payouts: [["alice.ownground2.testnet", (39n * N / 100n).toString()], ["bob.ownground2.testnet", (39n * N / 100n).toString()], ["carol.ownground2.testnet", (39n * N / 100n).toString()], ["dave.ownground2.testnet", (39n * N / 100n).toString()]],
+        activity_payouts: [],
         member_total: (156n * N / 100n).toString(),
         retention: (65n * N / 100n).toString(),
         maintenance: (39n * N / 100n).toString(),
-        activity_pool: (156n * N / 1000n).toString(),
-        ownership_pool: (1404n * N / 1000n).toString(),
-        total_work_points: 4,
+        activity_pool: "0",
+        ownership_pool: (156n * N / 100n).toString(),
+        total_work_points: 0,
         unpaid: [], executed_at: 0,
       }],
     },
@@ -376,14 +387,13 @@ function demoFixture() {
       [assetId]: {
         asset_id: assetId, epoch: 1,
         work_points: [
-          ["alice.testnet", { current: 0, lifetime: 4 }],
-          ["bob.testnet", { current: 0, lifetime: 2 }],
+          ["bob.ownground2.testnet", { current: 0, lifetime: 2 }],
         ],
-        capital_points: [["alice.testnet", 2], ["bob.testnet", 2], ["carol.testnet", 2], ["dave.testnet", 2]],
+        capital_points: [["alice.ownground2.testnet", 2], ["bob.ownground2.testnet", 2], ["carol.ownground2.testnet", 2], ["dave.ownground2.testnet", 2]],
       },
     },
     policies: {
-      community_id: "lagos-energy-cooperative",
+      community_id: "lagos-energy-cooperative-2",
       distribution: { members_bp: 6000, treasury_bp: 2500, maintenance_bp: 1500, activity_bp: 1000 },
       spending: { max_single_expense: (2n * N).toString(), min_treasury_reserve: N.toString(), allowed_categories: ["maintenance", "operations"] },
       activity: { capital_per_near: 1, work_per_revenue_record: 1, work_per_revenue_near: 1 },
@@ -398,12 +408,207 @@ function demoFixture() {
     },
     breakdowns: {
       0: {
-        "alice.testnet": { distribution_id: 0, asset_id: assetId, account: "alice.testnet", distributed: (26n * N / 10n).toString(), member_total: (156n * N / 100n).toString(), activity_pool: (156n * N / 1000n).toString(), ownership_pool: (1404n * N / 1000n).toString(), member_allocation_bp: 2500, member_work_points: 4, total_work_points: 4, ownership_payout: (351n * N / 1000n).toString(), activity_payout: (156n * N / 1000n).toString(), total_payout: (507n * N / 1000n).toString() },
-        "bob.testnet": { distribution_id: 0, asset_id: assetId, account: "bob.testnet", distributed: (26n * N / 10n).toString(), member_total: (156n * N / 100n).toString(), activity_pool: (156n * N / 1000n).toString(), ownership_pool: (1404n * N / 1000n).toString(), member_allocation_bp: 2500, member_work_points: 0, total_work_points: 4, ownership_payout: (351n * N / 1000n).toString(), activity_payout: "0", total_payout: (351n * N / 1000n).toString() },
+        "alice.ownground2.testnet": { distribution_id: 0, asset_id: assetId, account: "alice.ownground2.testnet", distributed: (26n * N / 10n).toString(), member_total: (156n * N / 100n).toString(), activity_pool: "0", ownership_pool: (156n * N / 100n).toString(), member_allocation_bp: 2500, member_work_points: 0, total_work_points: 0, ownership_payout: (39n * N / 100n).toString(), activity_payout: "0", total_payout: (39n * N / 100n).toString() },
+        "bob.ownground2.testnet": { distribution_id: 0, asset_id: assetId, account: "bob.ownground2.testnet", distributed: (26n * N / 10n).toString(), member_total: (156n * N / 100n).toString(), activity_pool: "0", ownership_pool: (156n * N / 100n).toString(), member_allocation_bp: 2500, member_work_points: 0, total_work_points: 0, ownership_payout: (39n * N / 100n).toString(), activity_payout: "0", total_payout: (39n * N / 100n).toString() },
       },
     },
-    raw: 16n * N / 100n, // treasury 0 + storage 0.16 + bonds 0
+    raw: 133n * N / 100n, // treasury 1.04 + storage 0.29 + bonds 0
   };
+}
+
+// ---- Transfer receipt checks (remediation P1) ---------------------------
+// Given the receipts file a demo run writes (demo-receipts-<community>.json:
+// [{ label, signer, tx, description?, deciding?, expect? }]), query every
+// tx hash via RPC and assert it succeeded, then prove the money moved by
+// comparing the receiver's balance across the tx's block window:
+//   * the deciding acquire vote moved the target to the seller;
+//   * the deciding expense vote moved the expense amount to its recipient;
+//   * the distribution moved each member's payout to that member.
+// The `tx` RPC response carries no receipt actions (no `receipts` array
+// with Transfer actions), so the transfer itself is proved from onchain
+// balances instead: balance at the parent of the tx block vs balance at
+// the highest block any receipt outcome landed in. A receiver who did
+// not sign the tx gains exactly the transfer amount; a receiver who did
+// sign also pays that tx's gas (sum of tokens_burnt over the tx and its
+// receipts) and its attached deposit, so those are subtracted. Balances
+// are compared as exact yoctoNEAR BigInts, never floats. A tx whose
+// label carries expect "fail:<substring>" must instead show that
+// substring in one of its receipt failures (the demo's over-cap expense,
+// proof 2). Refunds have no demo txs — they are covered by the contract
+// unit tests, and this function says so.
+async function rpcFirst(method, params) {
+  for (const url of RPCS) {
+    try {
+      return await rpc(url, method, params);
+    } catch (e) {
+      if (url === RPCS[RPCS.length - 1]) throw e;
+    }
+  }
+}
+
+const blockHeaderCache = new Map();
+async function blockHeader(hash) {
+  if (!blockHeaderCache.has(hash)) {
+    const b = await rpcFirst("block", { block_id: hash });
+    blockHeaderCache.set(hash, b.header);
+  }
+  return blockHeaderCache.get(hash);
+}
+
+async function balanceAt(account, blockId) {
+  const r = await rpcFirst("query", {
+    request_type: "view_account",
+    account_id: account,
+    block_id: blockId,
+  });
+  return BigInt(r.amount);
+}
+
+function totalBurnt(outcome) {
+  return [outcome.transaction_outcome, ...(outcome.receipts_outcome || [])]
+    .reduce((s, o) => s + BigInt(o.outcome.tokens_burnt), 0n);
+}
+
+function attachedDeposit(outcome) {
+  // Deposits on the signed tx's own actions (e.g. the 0.01 NEAR storage
+  // deposit execute_distribution requires of its caller).
+  let total = 0n;
+  for (const a of outcome?.transaction?.actions || []) {
+    if (a.FunctionCall?.deposit) total += BigInt(a.FunctionCall.deposit);
+    if (a.Transfer?.deposit) total += BigInt(a.Transfer.deposit);
+  }
+  return total;
+}
+
+async function balanceDelta(outcome, account) {
+  // [parent of the tx block, highest block any receipt outcome landed in]
+  const txBlock = outcome.transaction_outcome.block_hash;
+  const before = (await blockHeader(txBlock)).prev_hash;
+  let afterHash = txBlock;
+  let maxHeight = (await blockHeader(txBlock)).height;
+  for (const ro of outcome.receipts_outcome || []) {
+    const h = await blockHeader(ro.block_hash);
+    if (h.height > maxHeight) { maxHeight = h.height; afterHash = ro.block_hash; }
+  }
+  const beforeBal = await balanceAt(account, before);
+  const afterBal = await balanceAt(account, afterHash);
+  return afterBal - beforeBal;
+}
+
+async function txOutcome(hash, signer) {
+  return rpcFirst("tx", [hash, signer]);
+}
+
+function txSucceeded(outcome) {
+  const s = outcome?.status;
+  return !!s && (s.SuccessValue !== undefined || s.SuccessReceiptId !== undefined);
+}
+
+function receiptFailures(outcome) {
+  const found = [];
+  if (outcome?.status?.Failure) found.push(JSON.stringify(outcome.status.Failure));
+  const walk = (list) => {
+    for (const r of list || []) {
+      if (r?.status?.Failure) found.push(JSON.stringify(r.status.Failure));
+      walk(r?.receipts_outcome);
+      // Some providers nest outcomes under `outcome.receipts_outcome`.
+      walk(r?.outcome?.receipts_outcome);
+    }
+  };
+  walk(outcome?.receipts_outcome);
+  return found;
+}
+
+async function runReceiptChecks(receiptsPath, contract, communityId) {
+  const entries = JSON.parse(fs.readFileSync(receiptsPath, "utf8"));
+  if (!Array.isArray(entries) || !entries.length) throw new Error(`no receipts in ${receiptsPath}`);
+  console.log(`\nReceipt checks: ${entries.length} demo transactions from ${receiptsPath}\n`);
+  const outcomes = new Map();
+  for (const e of entries) {
+    if (!e.tx) { check(`R ${e.label} has a tx hash`, false, `signer=${e.signer}`); continue; }
+    let outcome;
+    try {
+      outcome = await txOutcome(e.tx, e.signer);
+    } catch (err) {
+      check(`R ${e.label} tx readable onchain`, false, `${e.tx} (${err.message})`);
+      continue;
+    }
+    outcomes.set(e.label + "|" + e.tx, outcome);
+    if (e.expect && e.expect.startsWith("fail:")) {
+      const needle = e.expect.slice(5);
+      const fails = receiptFailures(outcome);
+      check(`R ${e.label} failed onchain as expected`,
+        fails.some((f) => f.includes(needle)),
+        `failures: ${fails.join(" | ").slice(0, 200) || "none"}`);
+    } else {
+      check(`R ${e.label} tx succeeded`, txSucceeded(outcome), `${e.tx.slice(0, 12)}…`);
+      const fails = receiptFailures(outcome);
+      check(`R ${e.label} no receipt failures`, fails.length === 0,
+        fails.length ? fails.join(" | ").slice(0, 200) : "clean");
+    }
+  }
+  const deciding = (label) => entries.filter((e) => e.label === label && e.deciding);
+  const findOutcome = (label) => {
+    // The deciding tx that actually executed the call: skip the
+    // fail-expected deciding vote (step 8's over-cap expense, which
+    // correctly moved no money) and take the successful one.
+    const es = deciding(label).filter((e) => !(e.expect && e.expect.startsWith("fail:")));
+    if (!es.length) return null;
+    return outcomes.get(label + "|" + es[0].tx) || null;
+  };
+
+  // Seller paid the target (acquire). The seller did not sign the
+  // deciding vote tx, so its balance must rise by exactly the price.
+  const community = await view(contract, "get_community", { community_id: communityId });
+  const asset = await view(contract, "get_asset", { asset_id: community.asset_ids[0] });
+  const acqOutcome = findOutcome("dao:acquire_asset");
+  let acqDelta = null;
+  if (acqOutcome) acqDelta = await balanceDelta(acqOutcome, asset.seller);
+  check("R seller paid the target",
+    acqDelta !== null && acqDelta === y(asset.value),
+    acqOutcome ? `seller=${asset.seller} value=${fmt(asset.value)} balance delta=${acqDelta === null ? "?" : fmt(acqDelta)}` : "no deciding acquire vote recorded");
+
+  // Expense recipient paid (the successful expense only). Same: the
+  // recipient did not sign the deciding vote tx.
+  const expenses = await view(contract, "get_expenses", { asset_id: asset.id });
+  const expOutcome = findOutcome("dao:pay_expense");
+  for (const e of expenses) {
+    const delta = expOutcome ? await balanceDelta(expOutcome, e.recipient) : null;
+    check(`R expense recipient paid ${fmt(e.amount)}`,
+      delta !== null && delta === y(e.amount),
+      `recipient=${e.recipient} amount=${fmt(e.amount)} balance delta=${delta === null ? "?" : fmt(delta)}`);
+  }
+
+  // Member payouts landed. Non-signing members gain exactly their
+  // payout; the member who signed the distribution tx also paid that
+  // tx's gas and its attached storage deposit, so those are subtracted.
+  const dists = await view(contract, "get_distributions", { asset_id: asset.id });
+  const distEntry = entries.find((e) => e.label === "execute_distribution");
+  const distOutcome = distEntry ? outcomes.get("execute_distribution|" + distEntry.tx) : null;
+  const distBurnt = distOutcome ? totalBurnt(distOutcome) : 0n;
+  const distDeposit = distOutcome ? attachedDeposit(distOutcome) : 0n;
+  for (const d of dists) {
+    for (const [member, amount] of d.payouts) {
+      const delta = distOutcome ? await balanceDelta(distOutcome, member) : null;
+      const expected = member === distEntry?.signer
+        ? y(amount) - distBurnt - distDeposit
+        : y(amount);
+      check(`R payout landed for ${member}`,
+        delta !== null && delta === expected,
+        `${member} ${fmt(amount)} balance delta=${delta === null ? "?" : fmt(delta)}${member === distEntry?.signer ? ` (signer: - gas ${fmt(distBurnt)} - deposit ${fmt(distDeposit)})` : ""}`);
+    }
+  }
+
+  // Refunds: the demo performs no cancel/refund, so no refund txs exist
+  // to check here. Refund transfers are covered by the contract unit
+  // tests (failed-transfer revert + retry, claim-based cancel refunds).
+  const refundEntries = entries.filter((e) => /refund|cancel_campaign/.test(e.label));
+  check("R no demo refunds to verify (unit-tested instead)", refundEntries.length === 0,
+    refundEntries.length ? `${refundEntries.length} refund txs recorded` : "demo performs no refund");
+  console.log(failures === 0
+    ? `\nALL ${passes} CHECKS PASSED`
+    : `\n${failures} CHECKS FAILED, ${passes} PASSED`);
+  return failures === 0;
 }
 
 async function main() {
@@ -415,13 +620,19 @@ async function main() {
   }
   const ci = args.indexOf("--contract");
   if (ci < 0 || !args[ci + 1]) {
-    console.error("Usage: node scripts/verify.mjs --contract <contract.testnet> [--community <id>]");
+    console.error("Usage: node scripts/verify.mjs --contract <contract.testnet> [--community <id>] [--receipts <demo-receipts.json>]");
     console.error("   or: node scripts/verify.mjs --selftest");
     process.exit(2);
   }
   const contract = args[ci + 1];
   const communityArg = args.indexOf("--community");
   const communityId = communityArg >= 0 ? args[communityArg + 1] : null;
+  const receiptsArg = args.indexOf("--receipts");
+  const receiptsPath = receiptsArg >= 0 ? args[receiptsArg + 1] : null;
+  if (receiptsPath && !communityId) {
+    console.error("--receipts needs --community (transfer expectations come from that community's live state)");
+    process.exit(2);
+  }
 
   const ids = await view(contract, "list_communities", {});
   const targets = communityId ? [communityId] : ids;
@@ -458,6 +669,9 @@ async function main() {
     const raw = await rawBalance(contract);
     console.log(`OwnGround verify: ${contract} / ${target}\n`);
     ok = await runChecks({ community, treasury, campaigns, assets, revenue, expenses, distributions, activity, policies, breakdowns, raw }) && ok;
+    if (receiptsPath && target === communityId) {
+      ok = await runReceiptChecks(receiptsPath, contract, target) && ok;
+    }
   }
   process.exit(ok ? 0 : 1);
 }

@@ -9,6 +9,7 @@
 <script src="fastnear-wallet.bundle.js"></script>
 <script src="failure.js"></script>
 <script src="common.js"></script>
+<script src="dao.js"></script>
 </head>
 <body>
 <header class="top">
@@ -21,6 +22,7 @@
 </header>
 <main>
   <p id="pageStatus"></p>
+  <div id="proposalBox" class="panel" style="display:none"></div>
   <div id="notDeployed" class="panel" style="display:none">
     <p>The contract is not deployed yet. This page will load once it is live on testnet.</p>
   </div>
@@ -29,7 +31,7 @@
     <p class="muted" id="cMeta"></p>
 
     <h2>Treasury</h2>
-    <p class="muted small">Each figure is separate. Acquisition value, treasury balance and realised revenue are never combined into one total.</p>
+    <p class="muted small">Each figure is separate. Acquisition value, treasury balance and realised revenue are never combined into one total. Onchain revenue counts deposits confirmed onchain only; forfeited attestation bonds are a separate figure.</p>
     <div class="grid" id="treasuryCards"></div>
 
     <h2>Member deposits and payouts</h2>
@@ -56,7 +58,7 @@
 
     <h2>Governance</h2>
     <div class="panel">
-      <p>All spending is approved by the community DAO. Proposals live on the DAO itself.</p>
+      <p>All spending is approved by the community DAO. The buttons below create DAO proposals from your wallet; council members vote on them, and the DAO executes the approved call. Proposals live on the DAO itself.</p>
       <p><a id="daoLink" href="#" target="_blank" rel="noopener">Open the DAO proposals</a></p>
       <h3>Propose a distribution policy change</h3>
       <p class="small muted">Shares must sum to 100. The activity share is a slice of the member pool, split by verified work points instead of ownership. A change is proposed here, waits out the timelock, and then anyone can execute it. The old policy stays in force until then.</p>

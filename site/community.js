@@ -72,15 +72,20 @@ function renderCommunity(c, t, policies, campaigns, assets, distributions) {
   el("cMeta").textContent = c.description + "  DAO: " + c.dao_id + "  Members: " + c.members.join(", ");
   el("daoLink").href = "https://testnet.nearblocks.io/address/" + c.dao_id;
 
-  // Four separate figures, never combined into one total: verified
-  // revenue (onchain deposits only), expenses, retained reserves, and
-  // distributable revenue. Treasury detail follows below them.
+  // Four separate figures, never combined into one total: onchain
+  // revenue (deposits confirmed onchain only), forfeited attestation
+  // bonds as their own figure, expenses, retained reserves, and
+  // distributable revenue. Treasury detail follows below them. The
+  // treasury total_revenue INCLUDES forfeited bonds, so it is never
+  // used as a revenue headline.
   const onchainRevenue = assets.reduce((sum, a) => sum + BigInt(a.revenue_onchain), 0n);
+  const forfeitedBonds = assets.reduce((sum, a) => sum + BigInt(a.bond_forfeits || 0), 0n);
   const expenseCount = assets.reduce((n, a) => n + (a.expense_count || 0), 0);
   const paidMembers = aggregatePayouts(c.members, distributions);
   const paidCount = [...paidMembers.values()].filter((v) => v > 0n).length;
   const cards = [
-    ["Verified revenue", fmtYocto(t.total_revenue) + " NEAR", fmtYocto(onchainRevenue) + " NEAR recorded onchain", "tone-green"],
+    ["Onchain revenue", fmtYocto(onchainRevenue) + " NEAR", "deposits confirmed onchain only", "tone-green"],
+    ["Forfeited attestation bonds", fmtYocto(forfeitedBonds) + " NEAR", "bonds forfeited to the treasury after upheld disputes", "tone-amber"],
     ["Expenses", fmtYocto(t.total_expenses) + " NEAR", expenseCount + (expenseCount === 1 ? " expense recorded" : " expenses recorded"), "tone-amber"],
     ["Retained reserves", fmtYocto(t.retained) + " NEAR", (c.policy.treasury_bp / 100) + "% of each distribution", "tone-blue"],
     ["Distributable revenue", fmtYocto(t.distributable) + " NEAR", BigInt(t.distributable) > 0n ? "ready for the next distribution" : "nothing waiting to share", "tone-purple"],
@@ -128,19 +133,49 @@ function renderCommunity(c, t, policies, campaigns, assets, distributions) {
 
   el("campaigns").innerHTML = campaigns.length ? campaigns.map((camp) => {
     const mine = camp.contributors.find(([a]) => a === walletAccountId);
+    // The contract rejects refunds unless the campaign is Open, so the
+    // button is only rendered while it is Open.
+    const refundBtn = camp.status === "Open"
+      ? ' <button onclick="refund(\'' + escapeHtml(camp.id) + '\')">Refund my contribution</button>'
+      : "";
+    // The contract only cancels Open or Funded campaigns, and only the
+    // DAO may cancel, so this creates a DAO proposal.
+    const cancelBtn = (camp.status === "Open" || camp.status === "Funded")
+      ? ' <button onclick="cancelCampaign(\'' + escapeHtml(camp.id) + '\')">Cancel campaign (DAO)</button>'
+      : "";
+    // The contract only acquires Funded campaigns. The allocation editor
+    // is prefilled pro-rata by each contributor's share of the raised
+    // amount; the DAO proposal is blocked unless the shares sum to
+    // exactly 10000 basis points.
+    let acquireBox = "";
+    if (camp.status === "Funded") {
+      const alloc = proRataAllocations(camp.contributors);
+      const rows = alloc.map(([account, bp], i) =>
+        '<label>' + escapeHtml(account) + ' share in basis points (10000 = 100%)' +
+        '<input id="alloc-' + escapeHtml(camp.id) + "-" + i + '" data-account="' + escapeHtml(account) +
+        '" value="' + bp + '" inputmode="numeric" oninput="updateAllocSum(\'' + escapeHtml(camp.id) + '\')"></label>'
+      ).join("");
+      acquireBox = '<div class="panel"><h3>Acquire this asset</h3>' +
+        '<p class="small muted">Only the DAO can acquire the asset. This creates a DAO proposal; council members vote, then the DAO executes it. Ownership shares must sum to exactly 10000 basis points.</p>' +
+        '<label>Seller account id<input id="seller-' + escapeHtml(camp.id) + '" placeholder="seller.testnet"></label>' +
+        rows +
+        '<p class="small">Allocation total: <span id="allocSum-' + escapeHtml(camp.id) + '">10000</span> of 10000 basis points</p>' +
+        '<button onclick="acquireAsset(\'' + escapeHtml(camp.id) + '\')">Propose acquisition (DAO)</button></div>';
+    }
     return '<div class="panel"><h3>' + escapeHtml(camp.asset_name) + '</h3>' +
       "<p>Target " + fmtYocto(camp.target) + " NEAR, raised " + fmtYocto(camp.raised) + " NEAR. Status " + escapeHtml(camp.status) + ". Deadline " + fmtDate(camp.deadline) + ".</p>" +
       "<p class=\"small muted\">You contributed " + (mine ? fmtYocto(mine[1]) + " NEAR" : "nothing yet") + ".</p>" +
       '<label>Amount in NEAR<input id="amt-' + escapeHtml(camp.id) + '" placeholder="2.5"></label>' +
-      '<button onclick="contribute(\'' + escapeHtml(camp.id) + '\')">Contribute</button> ' +
-      '<button onclick="refund(\'' + escapeHtml(camp.id) + '\')">Refund my contribution</button> ' +
-      '<button onclick="acquireAsset(\'' + escapeHtml(camp.id) + '\')">Acquire asset (DAO)</button></div>';
+      '<button onclick="contribute(\'' + escapeHtml(camp.id) + '\')">Contribute</button>' + refundBtn + cancelBtn + "</div>" + acquireBox;
   }).join("") : "<p>No campaigns yet.</p>";
 
-  el("assets").innerHTML = assets.length ? assets.map((a) =>
-    '<div class="panel"><h3><a href="asset.html?id=' + encodeURIComponent(a.id) + '">' + escapeHtml(a.name) + "</a></h3>" +
-    "<p>Value " + fmtYocto(a.value) + " NEAR. Realised revenue " + fmtYocto(a.revenue_onchain) + " NEAR. Expenses " + fmtYocto(a.expenses_total) + " NEAR. Status " + escapeHtml(a.status) + ".</p></div>"
-  ).join("") : "<p>No assets yet.</p>";
+  el("assets").innerHTML = assets.length ? assets.map((a) => {
+    const alloc = (a.allocations || []).map(([account, bp]) =>
+      escapeHtml(account) + " " + (bp / 100) + "%").join(", ");
+    return '<div class="panel"><h3><a href="asset.html?id=' + encodeURIComponent(a.id) + '">' + escapeHtml(a.name) + "</a></h3>" +
+    "<p>Value " + fmtYocto(a.value) + " NEAR. Realised revenue " + fmtYocto(a.revenue_onchain) + " NEAR. Expenses " + fmtYocto(a.expenses_total) + " NEAR. Status " + escapeHtml(a.status) + ".</p>" +
+    "<p class=\"small\">Ownership allocations: " + (alloc || "none set yet") + "</p></div>";
+  }).join("") : "<p>No assets yet.</p>";
 
   el("curPolicy").textContent = "members " + c.policy.members_bp / 100 + "%, retention " + c.policy.treasury_bp / 100 +
     "%, maintenance " + c.policy.maintenance_bp / 100 + "%, activity share " + c.policy.activity_bp / 100 + "% of the member pool";
@@ -216,13 +251,55 @@ async function refund(campaignId) {
   } catch (e) { reportFailure(e); }
 }
 
+// Live total for the allocation editor: the proposal is blocked unless
+// the shares sum to exactly 10000 basis points.
+function updateAllocSum(campaignId) {
+  const inputs = document.querySelectorAll('input[id^="alloc-' + campaignId + '-"]');
+  let sum = 0;
+  inputs.forEach((n) => { const v = Number(n.value); if (Number.isInteger(v)) sum += v; });
+  const span = el("allocSum-" + campaignId);
+  if (span) span.textContent = String(sum);
+}
+
+function readAllocations(campaignId) {
+  const inputs = document.querySelectorAll('input[id^="alloc-' + campaignId + '-"]');
+  const out = [];
+  inputs.forEach((n) => out.push([n.getAttribute("data-account"), Number(n.value)]));
+  return out;
+}
+
 async function acquireAsset(campaignId) {
   if (!needWallet()) return;
-  const seller = window.prompt("Seller account id (receives the target amount):");
-  if (!seller) return;
+  const seller = el("seller-" + campaignId).value.trim();
+  if (!seller) { pageStatus("Enter the seller account id."); return; }
+  const allocation = readAllocations(campaignId);
+  const check = validateAllocations(allocation, community.members);
+  if (!check.ok) { pageStatus(check.error); return; }
   try {
-    pageStatus("Acquiring the asset…");
-    await walletCall(contractId(), "acquire_asset", { campaign_id: campaignId, seller: seller.trim() }, "10000000000000000000000");
+    pageStatus("Creating a DAO proposal to acquire the asset…");
+    const id = await createDaoProposal(
+      community.dao_id,
+      "Acquire the asset for campaign " + campaignId + " from " + seller,
+      "acquire_asset",
+      { campaign_id: campaignId, seller: seller, allocation: allocation },
+      "10000000000000000000000"
+    );
+    showProposalCreated(community.dao_id, id, "Acquire the asset for campaign " + campaignId + " from " + seller);
+  } catch (e) { reportFailure(e); }
+}
+
+async function cancelCampaign(campaignId) {
+  if (!needWallet()) return;
+  try {
+    pageStatus("Creating a DAO proposal to cancel the campaign…");
+    const id = await createDaoProposal(
+      community.dao_id,
+      "Cancel campaign " + campaignId + " and refund every contributor",
+      "cancel_campaign",
+      { campaign_id: campaignId },
+      "10000000000000000000000"
+    );
+    showProposalCreated(community.dao_id, id, "Cancel campaign " + campaignId + " and refund every contributor");
   } catch (e) { reportFailure(e); }
 }
 
@@ -235,17 +312,24 @@ async function proposePolicy() {
   if ([m, t, mn, a].some((x) => Number.isNaN(x) || x < 0 || x > 100)) { pageStatus("Percents must be numbers between 0 and 100."); return; }
   if (m + t + mn !== 100) { pageStatus("Members, retention and maintenance must sum to 100."); return; }
   try {
-    pageStatus("Proposing the distribution policy change…");
-    await walletCall(contractId(), "propose_policy_change", {
-      community_id: communityId,
-      policy_type: "Distribution",
-      new_params: {
-        Distribution: {
-          members_bp: Math.round(m * 100), treasury_bp: Math.round(t * 100),
-          maintenance_bp: Math.round(mn * 100), activity_bp: Math.round(a * 100),
+    pageStatus("Creating a DAO proposal for the distribution policy change…");
+    const id = await createDaoProposal(
+      community.dao_id,
+      "Propose a distribution policy change for community " + communityId,
+      "propose_policy_change",
+      {
+        community_id: communityId,
+        policy_type: "Distribution",
+        new_params: {
+          Distribution: {
+            members_bp: Math.round(m * 100), treasury_bp: Math.round(t * 100),
+            maintenance_bp: Math.round(mn * 100), activity_bp: Math.round(a * 100),
+          },
         },
       },
-    }, "10000000000000000000000");
+      "10000000000000000000000"
+    );
+    showProposalCreated(community.dao_id, id, "Propose a distribution policy change for community " + communityId);
   } catch (e) { reportFailure(e); }
 }
 
@@ -259,21 +343,30 @@ async function proposeSpendingPolicy() {
   const cats = el("spCats").value.split(",").map((s) => s.trim()).filter(Boolean);
   if (!cats.length) { pageStatus("List at least one allowed category."); return; }
   try {
-    pageStatus("Proposing the spending policy change…");
-    await walletCall(contractId(), "propose_policy_change", {
-      community_id: communityId,
-      policy_type: "Spending",
-      new_params: {
-        Spending: {
-          max_single_expense: cap.toString(),
-          min_treasury_reserve: reserve.toString(),
-          allowed_categories: cats,
+    pageStatus("Creating a DAO proposal for the spending policy change…");
+    const id = await createDaoProposal(
+      community.dao_id,
+      "Propose a spending policy change for community " + communityId,
+      "propose_policy_change",
+      {
+        community_id: communityId,
+        policy_type: "Spending",
+        new_params: {
+          Spending: {
+            max_single_expense: cap.toString(),
+            min_treasury_reserve: reserve.toString(),
+            allowed_categories: cats,
+          },
         },
       },
-    }, "10000000000000000000000");
+      "10000000000000000000000"
+    );
+    showProposalCreated(community.dao_id, id, "Propose a spending policy change for community " + communityId);
   } catch (e) { reportFailure(e); }
 }
 
+// execute_policy_change is NOT DAO gated: the contract lets anyone call
+// it after the timelock, so this stays a direct member call.
 async function executeAmendment(id) {
   if (!needWallet()) return;
   try {
@@ -288,11 +381,18 @@ async function executeAmendment(id) {
 async function cancelAmendment(id) {
   if (!needWallet()) return;
   try {
-    pageStatus("Cancelling the amendment…");
-    await walletCall(contractId(), "cancel_policy_change", {
-      community_id: communityId,
-      amendment_id: id,
-    }, "10000000000000000000000");
+    pageStatus("Creating a DAO proposal to cancel the amendment…");
+    const pid = await createDaoProposal(
+      community.dao_id,
+      "Cancel policy amendment " + id + " for community " + communityId,
+      "cancel_policy_change",
+      {
+        community_id: communityId,
+        amendment_id: id,
+      },
+      "10000000000000000000000"
+    );
+    showProposalCreated(community.dao_id, pid, "Cancel policy amendment " + id + " for community " + communityId);
   } catch (e) { reportFailure(e); }
 }
 

@@ -155,8 +155,15 @@ impl Asset {
 
     /// Suspend work points (a dispute): remove them from the current
     /// epoch only, floored at 0. The lifetime total is untouched, and a
-    /// distribution already paid is never re-run.
-    pub fn suspend_work_points(&mut self, account: &AccountId, points: u64) {
+    /// distribution already paid is never re-run. Epoch-scoped: if the
+    /// entry's epoch is not the asset's current epoch, the points
+    /// were already consumed by a distribution (or reset), so this is
+    /// a no-op — suspending them would dock the member's new-epoch
+    /// points for an old entry's dispute.
+    pub fn suspend_work_points(&mut self, account: &AccountId, points: u64, entry_epoch: u64) {
+        if entry_epoch != self.epoch {
+            return;
+        }
         if let Some((_, p)) = self.work.iter_mut().find(|(a, _)| a == account) {
             p.current = p.current.saturating_sub(points);
         }
@@ -164,8 +171,14 @@ impl Asset {
 
     /// Restore suspended work points (a dispute was rejected and the
     /// verification stands). Only the current epoch grows: a restore is
-    /// not new work, so the lifetime total is untouched.
-    pub fn restore_work_points(&mut self, account: &AccountId, points: u64) {
+    /// not new work, so the lifetime total is untouched. Epoch-scoped:
+    /// if the entry's epoch is not the asset's current epoch, the
+    /// points were already consumed by a distribution, so restoring
+    /// them would double-pay points into the new epoch — a no-op.
+    pub fn restore_work_points(&mut self, account: &AccountId, points: u64, entry_epoch: u64) {
+        if entry_epoch != self.epoch {
+            return;
+        }
         if points == 0 {
             return;
         }

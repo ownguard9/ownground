@@ -2,7 +2,10 @@
 // RAN LIVE on testnet 2026-11-09: contract ownground.testnet, DAO
 // lagos-energy.testnet, members alice/bob/carol/dave.ownground.testnet,
 // seller seller.ownground.testnet. Run output is saved to
-// demo-log-live.txt.
+// demo-log-live.txt. V2 (remediation re-demo) runs the same 17 steps
+// against ownground2.testnet / lagos-energy2.testnet with
+// OWNGROUND_PARENT=ownground2.testnet; expected numbers are the v2
+// figures in the header below (payouts 0.39 each — see step 14).
 //
 //   1. npm install near-api-js@5.1.1   (in ~/workspace/commonhold)
 //   2. Create the demo accounts on testnet and fund them:
@@ -24,14 +27,20 @@
 // the same approach FairShare used for fairshare-dao.testnet.
 //
 // The script verifies every expected number and aborts on the first
-// mismatch. Expected final numbers (DESIGN.md fix 11 and 15):
-//   D = 2.6 NEAR; alice 0.507, bob 0.351, carol 0.351, dave 0.351;
-//   retention 0.65, maintenance 0.39; final treasury 0.0 NEAR exactly.
+// mismatch. Expected final numbers (DESIGN.md fix 11 and 15, as
+// revised when onchain deposits stopped earning work points):
+//   D = 2.6 NEAR; alice 0.39, bob 0.39, carol 0.39, dave 0.39;
+//   retention 0.65, maintenance 0.39; final treasury 1.04 NEAR exactly.
 // The dispute proof runs before the distribution and is upheld, so
 // bob's 2 work points are removed and the 0.1 NEAR bond enters the
-// treasury as revenue (total_revenue 3.1, D 2.6).
+// treasury as revenue (total_revenue 3.1, D 2.6). Alice's 3 NEAR
+// onchain deposit earns no work points (a deposit proves money moved,
+// not that the asset earned it), so no verified work stands at
+// distribution and the activity slice falls back to ownership: the
+// whole 1.56 NEAR member pool splits by ownership, 0.39 each.
 //
 // Demo accounts are test accounts only. Nothing here is mainnet.
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -43,8 +52,15 @@ const fmt = (v) => {
 const CONTRACT = process.env.OWNGROUND_CONTRACT;
 const DAO = process.env.OWNGROUND_DAO;
 const SELLER = process.env.DEMO_SELLER;
-const MEMBERS = ["alice.ownground.testnet", "bob.ownground.testnet", "carol.ownground.testnet", "dave.ownground.testnet"];
-const COMMUNITY = "lagos-energy-cooperative";
+// Member subaccounts live under one parent account: ownground.testnet
+// for v1, ownground2.testnet for v2 (OWNGROUND_PARENT). The demo's
+// expected numbers are the same on either parent.
+const PARENT = process.env.OWNGROUND_PARENT || 'ownground.testnet';
+const MEMBERS = ["alice", "bob", "carol", "dave"].map((r) => `${r}.${PARENT}`);
+const OPS = `ops.${PARENT}`;
+// Community id: override with OWNGROUND_COMMUNITY to re-run the demo
+// against a contract that already holds a community (v2 attempt 2).
+const COMMUNITY = process.env.OWNGROUND_COMMUNITY || "lagos-energy-cooperative";
 // The contract generates campaign and asset ids (e.g. lagos-energy-cooperative-c0,
 // lagos-energy-cooperative-a0) and acquire_asset takes an ownership allocation.
 // Both ids are read back from get_community after the calls that create them.
@@ -106,6 +122,18 @@ function assertTrue(cond, label) {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Receipts record: every transaction the demo sends, so scripts/verify.mjs
+// --receipts can check each tx hash onchain afterwards (tx status +
+// Transfer receipts proving the money moved). Written incrementally, so
+// a partial run still leaves its receipts behind.
+const RECEIPTS_FILE = new URL(`../demo-receipts-${COMMUNITY}.json`, import.meta.url);
+const receipts = [];
+function recordTx(label, signer, txHash, extra = {}) {
+  if (!txHash) return;
+  receipts.push({ label, signer, tx: txHash, ...extra });
+  fs.writeFileSync(RECEIPTS_FILE, JSON.stringify(receipts, null, 2) + "\n");
+}
+
 async function account(id) {
   return near.account(id);
 }
@@ -123,6 +151,7 @@ async function callAs(id, method, args, depositYocto, gas = GAS) {
     gas: BigInt(gas),
     attachedDeposit: BigInt(depositYocto),
   });
+  recordTx(method, id, outcome?.transaction?.hash);
   // Settle pause: a view issued immediately after a write can read
   // pre-transaction state (the node lags finality by ~a block), so give
   // the write a moment to become visible before the next view.
@@ -136,7 +165,10 @@ async function balanceOf(id) {
 }
 // A DAO proposal that calls one OwnGround method, voted through by two
 // council members. Returns the proposal id and the final proposal state.
-async function daoCall(description, method, args, depositYocto, voters) {
+// `expect` describes the deciding vote's expected receipt outcome:
+// "success", or "fail:<substring>" when the execution must panic with
+// that reason (step 8's over-cap expense). Recorded in the receipts file.
+async function daoCall(description, method, args, depositYocto, voters, expect = "success") {
   const dao = await account(DAO);
   // Sputnik v2 add_proposal takes { proposal: ProposalInput }; the action
   // gas/deposit are stringly-typed (U64/U128), as in the FairShare scripts.
@@ -163,13 +195,14 @@ async function daoCall(description, method, args, depositYocto, voters) {
   // approved proposal. This is the FairShare pattern.
   const daoAcc = await account(DAO);
   const proposalId = Number(await daoAcc.viewFunction({ contractId: DAO, methodName: 'get_last_proposal_id', args: {} }));
-  await dao.functionCall({
+  const addOutcome = await dao.functionCall({
     contractId: DAO,
     methodName: "add_proposal",
     args: proposalArgs,
     gas: BigInt(GAS),
     attachedDeposit: utils.format.parseNearAmount("1"),
   });
+  recordTx("add_proposal", DAO, addOutcome?.transaction?.hash, { description });
   note(`DAO proposal ${proposalId}: ${description}`);
   // A vote that reaches threshold executes the proposal in the same
   // receipt chain, so if the contract call inside it panics (step 8's
@@ -178,7 +211,9 @@ async function daoCall(description, method, args, depositYocto, voters) {
   // the error message — record it instead of crashing the demo.
   let lastOutcome = null;
   let voteError = null;
-  for (const voter of voters) {
+  for (let vi = 0; vi < voters.length; vi++) {
+    const voter = voters[vi];
+    const deciding = vi === voters.length - 1;
     const v = await account(voter);
     try {
       // 150 TGas: the deciding vote must cover the DAO's own cost PLUS the
@@ -191,6 +226,8 @@ async function daoCall(description, method, args, depositYocto, voters) {
         gas: 150000000000000n,
         attachedDeposit: 0n,
       });
+      recordTx(`dao:${method}`, voter, lastOutcome?.transaction?.hash,
+        { description, deciding, expect: deciding ? expect : "success" });
       note(`${voter} voted Approve on proposal ${proposalId}`);
     } catch (e) {
       // Only swallow the error when the vote LANDED but the proposal
@@ -200,6 +237,10 @@ async function daoCall(description, method, args, depositYocto, voters) {
       // re-throw at once instead of polling a proposal that stays open.
       if (!String(e.message || e).includes("ExecutionError")) throw e;
       voteError = e;
+      // near-api-js attaches the outcome to the thrown error, so the
+      // failed vote's tx hash is still recoverable for the receipts file.
+      recordTx(`dao:${method}`, voter, e?.transaction_outcome?.id,
+        { description, deciding, expect: deciding ? expect : "success" });
       note(`${voter} voted Approve on proposal ${proposalId} (execution failed: ${String(e.message).slice(0, 140)})`);
       break;
     }
@@ -319,8 +360,8 @@ await callAs(ALICE, "record_revenue", {
   asset_id: ASSET_ID, amount: (3n * N).toString(), source: "Generator rental", reference: "invoice-001",
 }, ((3n * N) + (N / 100n)).toString());
 const rev1 = await view("get_revenue", { asset_id: ASSET_ID });
-assertTrue(rev1[0].status === "Onchain", "entry 0 Verified onchain");
-assertEq(rev1[0].points_awarded, 4, "alice work points 4 (1 + 3 per NEAR)");
+assertTrue(rev1[0].status === "Onchain", "entry 0 Onchain (deposit confirmed)");
+assertEq(rev1[0].points_awarded, 0, "alice work points 0 (onchain deposit earns no points)");
 
 // --- Step 6: reported revenue (proof 3) ----------------------------------
 step(6, "Bob records 1 NEAR reported revenue (proof: unverified earns no points)");
@@ -343,9 +384,9 @@ assertEq(t3.total_bonds_held, N / 10n, "bond held 0.1 NEAR");
 // --- Step 8: over-cap expense fails onchain (proof 2) --------------------
 step(8, "DAO tries a 2 NEAR expense (proof: excessive expense fails onchain with the reason)");
 const bad = await daoCall("Pay 2 NEAR for operations", "pay_expense", {
-  asset_id: ASSET_ID, amount: (2n * N).toString(), recipient: "ops.ownground.testnet",
+  asset_id: ASSET_ID, amount: (2n * N).toString(), recipient: OPS,
   description: "Oversized service bill", category: "operations",
-}, (N / 100n).toString(), [ALICE, BOB]);
+}, (N / 100n).toString(), [ALICE, BOB], "fail:expense exceeds max_single_expense");
 // The DAO proposal executes, but the contract call inside it must fail
 // with the spending-policy panic. The treasury must be unchanged.
 const t4 = await view("get_treasury", { community_id: COMMUNITY });
@@ -359,7 +400,7 @@ assertTrue(
 // --- Step 9: valid expense succeeds (proof 1) ---------------------------
 step(9, "DAO pays a 0.5 NEAR operations expense (proof: valid expense succeeds)");
 await daoCall("Pay 0.5 NEAR for operations", "pay_expense", {
-  asset_id: ASSET_ID, amount: (5n * N / 10n).toString(), recipient: "ops.ownground.testnet",
+  asset_id: ASSET_ID, amount: (5n * N / 10n).toString(), recipient: OPS,
   description: "Generator service", category: "operations",
 }, (N / 100n).toString(), [ALICE, BOB]);
 const t5 = await view("get_treasury", { community_id: COMMUNITY });
@@ -421,13 +462,13 @@ assertEq(d.distributed, 26n * N / 10n, "D = 2.6 NEAR");
 assertEq(d.member_total, 156n * N / 100n, "member pool 1.56 NEAR");
 assertEq(d.retention, 65n * N / 100n, "retention 0.65 NEAR");
 assertEq(d.maintenance, 39n * N / 100n, "maintenance 0.39 NEAR");
-assertEq(d.activity_pool, 156n * N / 1000n, "activity pool 0.156 NEAR");
-assertEq(d.ownership_pool, 1404n * N / 1000n, "ownership pool 1.404 NEAR");
+assertEq(d.activity_pool, 0, "activity pool 0 NEAR (no verified work stands)");
+assertEq(d.ownership_pool, 156n * N / 100n, "ownership pool 1.56 NEAR");
 const payout = (acct) => BigInt(d.payouts.find(([a]) => a === acct)?.[1] ?? 0);
-assertEq(payout(ALICE), 507n * N / 1000n, "PROOF 5: alice 0.507 NEAR (ownership 0.351 + activity 0.156)");
-assertEq(payout(BOB), 351n * N / 1000n, "bob 0.351 NEAR (ownership only, points removed)");
-assertEq(payout(CAROL), 351n * N / 1000n, "carol 0.351 NEAR");
-assertEq(payout(DAVE), 351n * N / 1000n, "dave 0.351 NEAR");
+assertEq(payout(ALICE), 390n * N / 1000n, "PROOF 5: alice 0.39 NEAR (ownership only, activity slice falls back)");
+assertEq(payout(BOB), 390n * N / 1000n, "bob 0.39 NEAR (ownership only, points removed)");
+assertEq(payout(CAROL), 390n * N / 1000n, "carol 0.39 NEAR");
+assertEq(payout(DAVE), 390n * N / 1000n, "dave 0.39 NEAR");
 assertEq(
   payout(ALICE) + payout(BOB) + payout(CAROL) + payout(DAVE) + BigInt(d.retention) + BigInt(d.maintenance),
   BigInt(d.distributed),
@@ -449,8 +490,9 @@ console.log("  1. Valid expense succeeds (0.5 NEAR operations).");
 console.log("  2. Excessive expense fails onchain with the spending-policy reason.");
 console.log("  3. Unverified revenue earns no points (bob 0 before attestation).");
 console.log("  4. Verified activity earns points (bob 2 after attestation).");
-console.log("  5. Two equal-ownership members get different totals (alice 0.507, bob 0.351).");
+console.log("  5. With no verified work standing at distribution, the activity slice falls back to ownership and all four equal owners get 0.39 NEAR.");
 console.log("  6. Total payouts equal D exactly (2.6 NEAR).");
 console.log("  7. Dispute flow: disputed, DAO upholds, entry rejected, points removed, bond to treasury.");
 console.log("  8. Policy amendment flow: proposed, timelock waited, executed, cap 1 to 2 NEAR.");
 console.log("\nDemo log:\n" + log.join("\n"));
+console.log(`\nReceipts file: ${RECEIPTS_FILE.pathname} (${receipts.length} transactions recorded)`);

@@ -5,10 +5,20 @@
 //!            - (acquisitions + expenses + distribution payouts + refunds)
 //!
 //! Locked funds (per community):
-//!   locked = sum of raised over open/funded campaigns.
+//!   locked = sum of raised over open/funded campaigns
+//!          + sum of unclaimed refund claims over every campaign.
+//! A cancelled campaign's raised is no longer counted as raised, but
+//! every unclaimed refund claim on it is locked instead, so the DAO
+//! cannot spend money owed to contributors and brick their claims.
+//! A claim recorded when an individual refund's transfer failed after
+//! its campaign moved on is locked the same way, whatever the
+//! campaign's status. (For an open/funded campaign the claim amount
+//! was already subtracted from `raised` when the refund was first
+//! recorded, so raised + claims never double-counts.)
 //!
 //! Identity (holds by the campaign accounting: every campaign's raised
-//! amount is exactly one of open/funded (locked), acquired, or refunded):
+//! amount is exactly one of open/funded (locked), acquired, refunded
+//! (paid), or claimable-but-unclaimed (locked)):
 //!   treasury - locked = revenue_onchain - expenses - distributed_payouts
 
 use crate::funding::{Campaign, CampaignStatus};
@@ -30,12 +40,28 @@ pub fn treasury_balance(c: &Community) -> u128 {
     deposits.checked_sub(spent).expect("treasury underflow: counters inconsistent")
 }
 
-/// Sum of raised over the community's open/funded campaigns.
+/// Sum of raised over the community's open/funded campaigns, plus
+/// every unclaimed refund claim (cancelled campaigns, and claims
+/// recorded when an individual refund's transfer failed after its
+/// campaign moved on). Spends may only draw on treasury - locked, so
+/// money owed to contributors can never be spent by the DAO.
 pub fn locked_funds(campaigns: &[Campaign]) -> u128 {
     campaigns
         .iter()
-        .filter(|c| c.status == CampaignStatus::Open || c.status == CampaignStatus::Funded)
-        .map(|c| c.raised)
+        .map(|c| {
+            let mut locked = 0u128;
+            if c.status == CampaignStatus::Open || c.status == CampaignStatus::Funded {
+                locked = locked
+                    .checked_add(c.raised)
+                    .expect("locked funds overflow");
+            }
+            let claims: u128 = c
+                .refund_claims
+                .iter()
+                .map(|(_, v)| *v)
+                .fold(0u128, |a, b| a.checked_add(b).expect("locked funds overflow"));
+            locked.checked_add(claims).expect("locked funds overflow")
+        })
         .fold(0u128, |a, b| a.checked_add(b).expect("locked funds overflow"))
 }
 
@@ -100,5 +126,31 @@ mod tests {
         acquired.raised = 5;
         acquired.status = CampaignStatus::Acquired;
         assert_eq!(locked_funds(&[open, funded, acquired]), 10);
+    }
+
+    #[test]
+    fn locked_counts_unclaimed_refund_claims() {
+        // A cancelled campaign's raised is no longer locked as raised,
+        // but every unclaimed refund claim on it is locked instead, so
+        // the DAO cannot spend money owed to contributors.
+        let mut cancelled = Campaign::new(
+            "c4".to_string(),
+            "lagos-energy".to_string(),
+            "Pump".to_string(),
+            "energy".to_string(),
+            10,
+            0,
+        );
+        cancelled.raised = 10;
+        cancelled.status = CampaignStatus::Cancelled;
+        cancelled.refund_claims = vec![
+            ("a.testnet".parse().unwrap(), 6),
+            ("b.testnet".parse().unwrap(), 4),
+        ];
+        assert_eq!(locked_funds(&[cancelled.clone()]), 10);
+        // After one claim is paid (removed from refund_claims), only
+        // the remaining claim stays locked.
+        cancelled.refund_claims.retain(|(a, _)| *a != "a.testnet".parse::<AccountId>().unwrap());
+        assert_eq!(locked_funds(&[cancelled]), 4);
     }
 }

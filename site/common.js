@@ -170,11 +170,19 @@ async function initWallet() {
         }
       }
       if (state === "confirmed") {
-        pageStatus("Transaction " + hashes[0] + " is confirmed onchain. See it on Nearblocks.");
+        const s = el("pageStatus");
+        if (s) {
+          s.innerHTML = "Transaction <a href=\"" + escapeHtml(nearLink(hashes[0])) + "\" target=\"_blank\" rel=\"noopener\">" +
+            escapeHtml(hashes[0]) + "</a> is confirmed onchain.";
+        }
       } else if (state === "failed") {
         reportFailure("Smart contract panicked: the transaction failed onchain");
       } else {
-        pageStatus("Transaction " + hashes[0] + " was sent. Confirmation not verified yet. Check it on Nearblocks.");
+        const s = el("pageStatus");
+        if (s) {
+          s.innerHTML = "Transaction <a href=\"" + escapeHtml(nearLink(hashes[0])) + "\" target=\"_blank\" rel=\"noopener\">" +
+            escapeHtml(hashes[0]) + "</a> was sent. Confirmation not verified yet. Check it on Nearblocks.";
+        }
       }
       window.history.replaceState({}, "", window.location.pathname + window.location.search + window.location.hash);
     }

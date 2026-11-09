@@ -84,12 +84,23 @@ checkSplit('D=0', 0n, [6000, 2500, 1500], [2500, 2500, 2500, 2500]);
   check('C acquire gate', 10n * N === 10n * N && treasury >= 10n * N);
 }
 
-// --- Case D: Hole 2 refund ---
+// --- Case D: Hole 2 refund (claim-based) ---
+// Cancel records one claimable refund per contributor (no transfers
+// in a loop). The unclaimed 10 NEAR is LOCKED: the treasury still
+// shows 10 NEAR but spendable is 0, so the DAO cannot spend money
+// owed to contributors. total_refunds counts only at claim payment:
+// after all four claims are paid, the treasury is 0.
 {
-  let C = 10n * N, F = 0n, locked = 10n * N, balance = 10n * N;
-  F += 10n * N; balance -= 10n * N; locked -= 10n * N;
+  const C = 10n * N, F0 = 0n, locked0 = 10n * N, balance0 = 10n * N;
+  const treasuryAtCancel = C - F0;
+  check('D treasury at cancel still 10 (claims unpaid)', treasuryAtCancel === 10n * N);
+  check('D locked at cancel is 10 (claims)', locked0 === 10n * N);
+  check('D spendable at cancel is 0', treasuryAtCancel - locked0 === 0n);
+  let F = F0, balance = balance0, locked = locked0;
+  F += 10n * N; balance -= 10n * N; locked -= 10n * N; // all claims paid
   const treasury = C - F;
-  check('D treasury after refund', treasury === 0n && balance === 0n);
+  check('D treasury after all claims paid', treasury === 0n && balance === 0n);
+  check('D locked after all claims paid', locked === 0n);
 }
 
 // --- Case E: multi-asset negative net (the D_effective cap) ---
