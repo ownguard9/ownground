@@ -41,6 +41,15 @@ function matchesQuery(row, q) {
   const query = q.trim().toLowerCase();
   return row.c.name.toLowerCase().includes(query) || row.id.toLowerCase().includes(query);
 }
+// Hand the community page what the list already fetched, so a click
+// shows the community at once instead of refetching everything.
+function cacheCommunityRow(id) {
+  try {
+    const row = allRows.find((r) => r.id === id);
+    if (!row) return;
+    sessionStorage.setItem("ownground-community-" + id, JSON.stringify({ c: row.c, t: row.t, camps: row.camps, savedAt: Date.now() }));
+  } catch (_) { /* the cache is a speed-up only; the page loads live without it */ }
+}
 function renderList() {
   const q = el("searchBox").value || "";
   const rows = allRows.filter((r) => matchesQuery(r, q));
@@ -60,7 +69,7 @@ function renderList() {
     const dots = c.members.map((m, j) =>
       '<span class="member-dot tone-' + ((i + j) % 4) + '" title="' + escapeHtml(m) + '">' +
       escapeHtml(m.split(".")[0][0].toUpperCase()) + '</span>').join("");
-    html += '<div class="panel"><h3><a href="community.html?id=' + escapeHtml(id) + '">' + escapeHtml(c.name) + '</a>' + tag + '</h3>' +
+    html += '<div class="panel"><h3><a href="community.html?id=' + escapeHtml(id) + '" onclick="cacheCommunityRow(\'' + escapeHtml(id) + '\')">' + escapeHtml(c.name) + '</a>' + tag + '</h3>' +
       '<p class="muted">' + escapeHtml(c.description || "") + '</p>' +
       '<div class="member-dots">' + dots + '<span class="small muted" style="align-self:center">' + c.members.length + ' members</span></div>' +
       (camps.length
@@ -77,14 +86,21 @@ async function load() {
   if (!deployed()) { el("notDeployed").style.display = ""; return; }
   pageStatus("Loading communities…");
   try {
-    const stats = await view("get_stats", {});
-    const ids = await view("list_communities", {});
+    const ids = (await view("list_communities", {})).filter((id) => !(window.HIDDEN_COMMUNITIES || []).includes(id));
     allRows = await Promise.all(ids.map(async (id) => {
       const c = await view("get_community", { community_id: id });
       const t = await view("get_treasury", { community_id: id });
       const camps = await Promise.all(c.campaign_ids.map((cid) => view("get_campaign", { campaign_id: cid })));
       return { id, c, t, camps };
     }));
+    // Stats count only the communities actually listed, so the header
+    // cards agree with the cards below (the hidden demo runs are not counted).
+    const stats = {
+      community_count: allRows.length,
+      asset_count: allRows.reduce((n, r) => n + r.c.asset_ids.length, 0),
+      total_revenue: allRows.reduce((s, r) => s + BigInt(r.c.total_revenue), 0n).toString(),
+      total_payouts: allRows.reduce((s, r) => s + BigInt(r.c.total_payouts), 0n).toString(),
+    };
     const totalMembers = allRows.reduce((n, r) => n + r.c.members.length, 0);
     el("stats").innerHTML =
       '<div class="card tone-green"><div class="label">Communities</div><div class="big">' + stats.community_count + '</div><div class="sub">' + stats.community_count + (stats.community_count === 1 ? ' live on testnet' : ' live on testnet') + '</div></div>' +

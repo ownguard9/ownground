@@ -10,12 +10,75 @@ function needWallet() {
   return true;
 }
 
+// Read the list page's handoff, if the user just clicked through and
+// it is fresh. It only carries the header; the numbers still refresh live.
+function readCachedCommunity(id) {
+  try {
+    const raw = sessionStorage.getItem("ownground-community-" + id);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (!data || !data.c || Date.now() - (data.savedAt || 0) > 120000) return null;
+    return data;
+  } catch (_) { return null; }
+}
+
+function renderHeader(c) {
+  el("cName").textContent = c.name;
+  el("cMeta").textContent = c.description + "  DAO: " + c.dao_id + "  Members: " + c.members.join(", ");
+  el("daoLink").href = "https://testnet.nearblocks.io/address/" + c.dao_id;
+}
+
+function renderPolicies(c, policies) {
+  el("curPolicy").textContent = "members " + c.policy.members_bp / 100 + "%, retention " + c.policy.treasury_bp / 100 +
+    "%, maintenance " + c.policy.maintenance_bp / 100 + "%, activity share " + c.policy.activity_bp / 100 + "% of the member pool";
+  const sp = c.spending_policy;
+  el("curSpending").textContent = "cap " + fmtYocto(sp.max_single_expense) + " NEAR (0 means no cap), reserve " +
+    fmtYocto(sp.min_treasury_reserve) + " NEAR, categories " + sp.allowed_categories.join(", ");
+  // Notes are re-created on every load, so drop the previous ones first.
+  el("curPolicy").parentElement.querySelectorAll(".policy-note").forEach((n) => n.remove());
+  if (c.capital_points.length) {
+    const pts = c.capital_points.map(([a, p]) => escapeHtml(a) + " " + p).join(", ");
+    const p = document.createElement("p");
+    p.className = "small muted policy-note";
+    p.textContent = "Capital points (cumulative contributions; display only, they never affect the activity slice): " + pts;
+    el("curPolicy").parentElement.appendChild(p);
+  }
+  const ap = c.activity_policy;
+  const q = document.createElement("p");
+  q.className = "small muted policy-note";
+  q.textContent = "Activity policy: " + ap.capital_per_near + " capital points per whole NEAR, " +
+    ap.work_per_revenue_record + " work points per verified revenue entry, " +
+    ap.work_per_revenue_near + " work points per whole NEAR of verified revenue. Dispute window " +
+    Math.round(c.dispute_window_ns / 86400000000000) + " days, amendment timelock " +
+    Math.round(c.timelock_ns / 86400000000000) + " days.";
+  el("curPolicy").parentElement.appendChild(q);
+  el("amendments").innerHTML = policies.amendments.length ? policies.amendments.map((a) => {
+    const when = new Date(Number(BigInt(a.deadline) / 1000000n)).toLocaleString();
+    return '<div class="panel"><p>Amendment ' + a.id + ": " + escapeHtml(a.policy_type) + " is " + escapeHtml(a.status) +
+      ". Executable after " + when + ".</p>" +
+      (a.status === "Pending"
+        ? '<button onclick="executeAmendment(' + a.id + ')">Execute amendment</button> ' +
+          '<button onclick="cancelAmendment(' + a.id + ')">Cancel amendment (DAO)</button>'
+        : "") + "</div>";
+  }).join("") : "<p>No amendments yet.</p>";
+}
+
 async function loadCommunity() {
   const params = new URLSearchParams(window.location.search);
   communityId = params.get("id");
   if (!communityId) { pageStatus("No community id in the link."); return; }
   if (!deployed()) { el("notDeployed").style.display = "block"; return; }
-  pageStatus("Loading this community…");
+  // The list page already fetched this community: show its name at once
+  // when the user just clicked through, then refresh live below.
+  const cached = readCachedCommunity(communityId);
+  if (cached) {
+    community = cached.c;
+    el("content").style.display = "block";
+    renderHeader(cached.c);
+    pageStatus("Refreshing live numbers…");
+  } else {
+    pageStatus("Loading this community…");
+  }
   try {
     const [c, t, policies] = await Promise.all([
       view("get_community", { community_id: communityId }),
@@ -23,15 +86,18 @@ async function loadCommunity() {
       view("get_policies", { community_id: communityId }),
     ]);
     community = c;
-    const [campaigns, assets] = await Promise.all([
+    // Header and policies show now; campaigns, assets and distributions
+    // arrive in one batch below instead of two sequential ones.
+    el("content").style.display = "block";
+    renderHeader(c);
+    renderPolicies(c, policies);
+    pageStatus("Loading campaigns and assets…");
+    const [campaigns, assets, distributions] = await Promise.all([
       Promise.all(community.campaign_ids.map((id) => view("get_campaign", { campaign_id: id }))),
       Promise.all(community.asset_ids.map((id) => view("get_asset", { asset_id: id }))),
+      Promise.all(community.asset_ids.map((id) => view("get_distributions", { asset_id: id }))),
     ]);
-    const distributions = await Promise.all(
-      community.asset_ids.map((id) => view("get_distributions", { asset_id: id }))
-    );
     pageStatus("");
-    el("content").style.display = "block";
     renderCommunity(community, t, policies, campaigns, assets, distributions);
   } catch (e) {
     pageStatus("Could not load this community: " + String(e.message).slice(0, 160));
@@ -68,10 +134,6 @@ function shortName(account) {
 }
 
 function renderCommunity(c, t, policies, campaigns, assets, distributions) {
-  el("cName").textContent = c.name;
-  el("cMeta").textContent = c.description + "  DAO: " + c.dao_id + "  Members: " + c.members.join(", ");
-  el("daoLink").href = "https://testnet.nearblocks.io/address/" + c.dao_id;
-
   // Four separate figures, never combined into one total: onchain
   // revenue (deposits confirmed onchain only), forfeited attestation
   // bonds as their own figure, expenses, retained reserves, and
@@ -176,37 +238,6 @@ function renderCommunity(c, t, policies, campaigns, assets, distributions) {
     "<p>Value " + fmtYocto(a.value) + " NEAR. Realised revenue " + fmtYocto(a.revenue_onchain) + " NEAR. Expenses " + fmtYocto(a.expenses_total) + " NEAR. Status " + escapeHtml(a.status) + ".</p>" +
     "<p class=\"small\">Ownership allocations: " + (alloc || "none set yet") + "</p></div>";
   }).join("") : "<p>No assets yet.</p>";
-
-  el("curPolicy").textContent = "members " + c.policy.members_bp / 100 + "%, retention " + c.policy.treasury_bp / 100 +
-    "%, maintenance " + c.policy.maintenance_bp / 100 + "%, activity share " + c.policy.activity_bp / 100 + "% of the member pool";
-  const sp = c.spending_policy;
-  el("curSpending").textContent = "cap " + fmtYocto(sp.max_single_expense) + " NEAR (0 means no cap), reserve " +
-    fmtYocto(sp.min_treasury_reserve) + " NEAR, categories " + sp.allowed_categories.join(", ");
-  if (c.capital_points.length) {
-    const pts = c.capital_points.map(([a, p]) => escapeHtml(a) + " " + p).join(", ");
-    const p = document.createElement("p");
-    p.className = "small muted";
-    p.textContent = "Capital points (cumulative contributions; display only, they never affect the activity slice): " + pts;
-    el("curPolicy").parentElement.appendChild(p);
-  }
-  const ap = c.activity_policy;
-  const q = document.createElement("p");
-  q.className = "small muted";
-  q.textContent = "Activity policy: " + ap.capital_per_near + " capital points per whole NEAR, " +
-    ap.work_per_revenue_record + " work points per verified revenue entry, " +
-    ap.work_per_revenue_near + " work points per whole NEAR of verified revenue. Dispute window " +
-    Math.round(c.dispute_window_ns / 86400000000000) + " days, amendment timelock " +
-    Math.round(c.timelock_ns / 86400000000000) + " days.";
-  el("curPolicy").parentElement.appendChild(q);
-  el("amendments").innerHTML = policies.amendments.length ? policies.amendments.map((a) => {
-    const when = new Date(Number(BigInt(a.deadline) / 1000000n)).toLocaleString();
-    return '<div class="panel"><p>Amendment ' + a.id + ": " + escapeHtml(a.policy_type) + " is " + escapeHtml(a.status) +
-      ". Executable after " + when + ".</p>" +
-      (a.status === "Pending"
-        ? '<button onclick="executeAmendment(' + a.id + ')">Execute amendment</button> ' +
-          '<button onclick="cancelAmendment(' + a.id + ')">Cancel amendment (DAO)</button>'
-        : "") + "</div>";
-  }).join("") : "<p>No amendments yet.</p>";
 }
 
 async function createCampaign() {

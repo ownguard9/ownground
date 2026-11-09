@@ -10,6 +10,10 @@ window.REPO_URL = "https://github.com/ownguard9/ownground";
 // v1 ownground.testnet is superseded — do not point the site at it.
 window.CONTRACT_ID = "ownground2.testnet";
 
+// Demo runs superseded by the receipt-verified run. The contract keeps
+// their history onchain, but the list shows only the live demo community.
+window.HIDDEN_COMMUNITIES = ["lagos-energy-cooperative", "lagos-energy-cooperative-2"];
+
 // Testnet only. Never point this at mainnet.
 window.NETWORK = "testnet";
 window.RPC_ENDPOINTS = ["https://rpc.testnet.near.org", "https://rpc.testnet.fastnear.com"];

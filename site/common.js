@@ -75,32 +75,37 @@ async function fetchWithTimeout(url, opts) {
   } finally { clearTimeout(timer); }
 }
 
+// Race every RPC endpoint and take the first success: on a phone the
+// first endpoint can be seconds slow while the other answers at once.
+// A failed endpoint only loses the race; all failing still throws.
 async function rpcViewCall(accountId, method, args) {
-  let lastErr = null;
-  for (const url of window.RPC_ENDPOINTS) {
-    try {
-      const res = await fetchWithTimeout(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0", id: method, method: "query",
-          params: {
-            request_type: "call_function",
-            account_id: accountId,
-            method_name: method,
-            args_base64: btoa(JSON.stringify(args || {})),
-            finality: "final",
-          },
-        }),
-      });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error.message || "RPC error");
-      const bytes = data.result && data.result.result;
-      if (!bytes) throw new Error("Empty RPC result");
-      return JSON.parse(new TextDecoder().decode(new Uint8Array(bytes)));
-    } catch (e) { lastErr = e; }
-  }
-  throw lastErr || new Error("All RPC endpoints failed");
+  const attempts = window.RPC_ENDPOINTS.map(async (url) => {
+    const res = await fetchWithTimeout(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: method, method: "query",
+        params: {
+          request_type: "call_function",
+          account_id: accountId,
+          method_name: method,
+          args_base64: btoa(JSON.stringify(args || {})),
+          finality: "final",
+        },
+      }),
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message || "RPC error");
+    const bytes = data.result && data.result.result;
+    if (!bytes) throw new Error("Empty RPC result");
+    return JSON.parse(new TextDecoder().decode(new Uint8Array(bytes)));
+  });
+  // Promise.any hides the reasons; surface the first endpoint's error
+  // so a failed load still says what actually went wrong.
+  return Promise.any(attempts).catch((e) => {
+    const first = e && e.errors && e.errors[0];
+    throw first || e;
+  });
 }
 
 async function rpcAccountBalance(accountId) {

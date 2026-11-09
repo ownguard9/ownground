@@ -25,7 +25,9 @@ twice, both runs passing all 17 steps with identical final numbers.
 The first v2 run used community `lagos-energy-cooperative-2`
 (campaign `-c1`, asset `-a1`); the second, fully receipt-verified run
 used community `lagos-energy-cooperative-3` (campaign `-c2`, asset
-`-a2`).
+`-a2`). An earlier partial attempt (`lagos-energy-cooperative`,
+acquired but never distributed) also sits on the contract; the site
+lists only the receipt-verified run.
 
 | What | Account / id |
 |---|---|
