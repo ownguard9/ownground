@@ -21,7 +21,6 @@
 </header>
 <main>
   <h1>Create a community</h1>
-  <p id="pageStatus"></p>
   <p class="lede">The site creates a Sputnik DAO for the community, then registers it here. You can also use a DAO you already have.
   Membership is fixed at creation and cannot change later. The founding policies below are set at creation; later changes go through an amendment (propose, wait the timelock, execute). Creating a community attaches 0.1 NEAR for storage.</p>
   <div class="panel">
@@ -39,6 +38,8 @@
       <label>DAO account<input id="cDao" placeholder="lagos-energy.sputnikv2.testnet"></label>
     </div>
     <label>Members, one NEAR account per line<textarea id="cMembers" rows="4" placeholder="alice.testnet&#10;bob.testnet"></textarea></label>
+    <p id="memberWarning" class="status" style="display:none"></p>
+    <button type="button" id="addMeBtn" class="secondary" style="display:none" onclick="addMeAsMember()">Add me to the members</button>
     <h3>Founding distribution policy</h3>
     <label>Members percent<input id="cPolMembers" value="60"></label>
     <label>Treasury retention percent<input id="cPolTreasury" value="25"></label>
@@ -53,6 +54,7 @@
     <label>Work points per verified revenue entry<input id="cActRecord" value="1"></label>
     <label>Work points per whole NEAR of verified revenue<input id="cActNear" value="1"></label>
     <button id="createBtn" onclick="createCommunity()">Create community</button>
+    <p id="pageStatus"></p>
     <p class="small muted">The community id is made from the name. Connect a wallet first.</p>
   </div>
   <p><a class="btn secondary" href="communities.html">Back to live communities</a></p>
@@ -191,6 +193,35 @@ function validateFormFields(f) {
   if (!cats.length) return "List at least one allowed spending category.";
   return "";
 }
+function memberList() {
+  return el("cMembers").value.split(/\n+/).map((s) => s.trim()).filter(Boolean);
+}
+// Warn when the connected wallet is not in the members list. Membership
+// is fixed at creation, so a creator who leaves themselves out (or types
+// their own account wrong) cannot start campaigns or contribute later.
+// The warning offers a one tap fix; the creator is never added silently.
+function checkMemberWarning() {
+  const warn = el("memberWarning");
+  const btn = el("addMeBtn");
+  if (!warn || !btn) return;
+  const me = walletAccountId;
+  if (!me || memberList().indexOf(me) >= 0) {
+    warn.style.display = "none";
+    btn.style.display = "none";
+    return;
+  }
+  warn.style.display = "";
+  btn.style.display = "";
+  warn.textContent = "You are not in the members list, so you will not be able to start campaigns or contribute. Add yourself before creating the community.";
+}
+function addMeAsMember() {
+  const me = walletAccountId;
+  if (!me) return;
+  if (memberList().indexOf(me) >= 0) { checkMemberWarning(); return; }
+  const ta = el("cMembers");
+  ta.value = ta.value.trim() ? ta.value.replace(/\s+$/, "") + "\n" + me : me;
+  checkMemberWarning();
+}
 function savePending(p) {
   try { localStorage.setItem(PENDING_KEY, JSON.stringify(p)); } catch (_) { /* storage unavailable */ }
 }
@@ -251,6 +282,7 @@ async function sendCreateCommunity(f, daoId) {
   }, window.STORAGE.createCommunity, window.GAS_100);
 }
 async function createCommunity() {
+  checkMemberWarning();
   if (!walletAccountId) { pageStatus("Connect a wallet first."); return; }
   const mode = daoMode();
   const f = readFormFields();
@@ -351,7 +383,23 @@ async function resumePending() {
         pageStatus("Could not check the DAO. Tap Create community to continue.");
       }
     } else {
-      pageStatus("Your DAO " + pending.daoId + " is ready. Tap Create community to register it.");
+      // No transaction hashes: the wallet may have opened in a new tab
+      // and the user came back here by hand, so the redirect never
+      // fired. Check whether the community already exists onchain.
+      const communityId = slugify(pending.fields.name);
+      pageStatus("Checking whether the community was created…");
+      const found = await waitForCommunity(communityId, 15000);
+      if (found) {
+        clearPending();
+        window.location.href = communityUrl(communityId);
+        return;
+      }
+      const s = el("pageStatus");
+      if (s) {
+        s.innerHTML = "The community may already be created. Open it here: <a href=\"" + escapeHtml(communityUrl(communityId)) + "\">" + escapeHtml(communityId) + "</a> or <a href=\"communities.html\">the live communities list</a>. If it is not there yet, tap Create community to try again.";
+      } else {
+        pageStatus("Your DAO " + pending.daoId + " is ready. Tap Create community to register it.");
+      }
     }
     return;
   }
@@ -415,13 +463,44 @@ async function resumePending() {
     pageStatus("Community created. Open the live communities list to see it.");
   }
 }
+// The wallet opens in a new tab, so the user can come back to this tab
+// by hand with no transaction hashes in the URL and the redirect never
+// fires. Re-check when the tab becomes visible or focused again: if the
+// pending community exists onchain by now, go to it. Read only; it
+// never sends a transaction.
+let recheckRunning = false;
+let lastRecheck = 0;
+async function recheckPendingOnReturn() {
+  if (document.hidden) return;
+  const pending = loadPending();
+  if (!pending || pending.step !== "community") return;
+  if (recheckRunning) return;
+  const now = Date.now();
+  if (now - lastRecheck < 10000) return;
+  lastRecheck = now;
+  recheckRunning = true;
+  try {
+    const communityId = slugify(pending.fields.name);
+    const found = await waitForCommunity(communityId, 15000);
+    if (found) {
+      clearPending();
+      window.location.href = communityUrl(communityId);
+    }
+  } finally {
+    recheckRunning = false;
+  }
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) recheckPendingOnReturn(); });
+window.addEventListener("focus", () => { recheckPendingOnReturn(); });
 el("cName").addEventListener("input", () => {
   if (!daoNameEdited) { el("cDaoName").value = slugify(el("cName").value); }
   updateDaoPreview();
 });
 el("cDaoName").addEventListener("input", () => { daoNameEdited = true; updateDaoPreview(); });
+el("cMembers").addEventListener("input", checkMemberWarning);
+window.owngroundWalletChanged = function () { checkMemberWarning(); };
 toggleDaoPanels();
-initWallet().then(() => { resumePending(); });
+initWallet().then(() => { checkMemberWarning(); resumePending(); });
 </script>
 </body>
 </html>
