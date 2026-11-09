@@ -184,6 +184,8 @@ th { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spa
 .flow li.now::before { background: var(--warn); color: #1a1200; border-color: var(--warn); }
 #pageStatus { color: var(--warn); min-height: 1.2em; }
 footer { border-top: 1px solid var(--line); padding: 18px 20px; color: var(--muted); font-size: 13px; text-align: center; }
+footer a { color: var(--muted); text-decoration: underline; text-underline-offset: 2px; }
+footer a:hover { color: var(--accent2); }
 /* Member deposits and payouts: one column on a phone, two side by
    side on a desktop, exactly like the stat cards. */
 .dep-grid { display: grid; grid-template-columns: 1fr; gap: 0 16px; }

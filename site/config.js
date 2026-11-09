@@ -3,6 +3,9 @@
 // No page copy hardcodes the brand name; pages read window.BRAND_NAME.
 window.BRAND_NAME = "OwnGround";
 
+// Public repo. The footer GitHub link reads this and nowhere else.
+window.REPO_URL = "https://github.com/ownguard9/ownguard";
+
 // Contract address. Empty until the contract is deployed to testnet;
 // the pages show a plain "not deployed yet" state until it is set.
 window.CONTRACT_ID = "ownground.testnet";

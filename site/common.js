@@ -256,6 +256,7 @@ async function view(method, args) {
 // Apply the brand name to every element marked data-brand.
 function applyBrand() {
   document.querySelectorAll("[data-brand]").forEach((n) => { n.textContent = window.BRAND_NAME; });
+  document.querySelectorAll("[data-repo]").forEach((n) => { n.href = window.REPO_URL; });
   document.title = document.title.replace("OwnGround", window.BRAND_NAME);
 }
 document.addEventListener("DOMContentLoaded", applyBrand);
