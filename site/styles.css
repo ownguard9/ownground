@@ -197,7 +197,7 @@ footer { border-top: 1px solid var(--line); padding: 18px 20px; color: var(--mut
      navigation gets its own clean second row. */
   header.top { flex-wrap: wrap; padding: 12px 14px; row-gap: 10px; }
   header.top .brand { font-size: 18px; }
-  header.top nav { order: 3; width: 100%; display: flex; gap: 18px; }
+  header.top nav { order: 3; width: 100%; display: flex; flex-wrap: wrap; gap: 6px 18px; }
   header.top nav a { margin-left: 0; font-size: 14px; }
   #connectBtn { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 8px 12px; font-size: 14px; }
   main { padding: 18px 14px 64px; }
