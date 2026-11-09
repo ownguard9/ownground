@@ -2,7 +2,7 @@
 
 **Own Together. Build Together. Grow Together.**
 
-Live site: https://ownguard.vercel.app/
+Live site: https://ownground.vercel.app/
 
 OwnGround is a community-owned productive asset platform on NEAR testnet.
 A community pools NEAR, acquires a productive asset through DAO governance,
