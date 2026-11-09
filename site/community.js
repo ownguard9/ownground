@@ -43,6 +43,163 @@ function spendingFailure(err) { return localFailure("spendingStatus", err); }
 function amendStatus(msg) { localStatus("amendStatus", msg); }
 function amendFailure(err) { return localFailure("amendStatus", err); }
 
+// ---- Pending wallet actions and the return re-check ----
+// The wallet opens in a new tab. After signing, the user comes back to
+// this tab by hand, so the page never reloads with transactionHashes
+// and the "in progress" message just sits there. The action is recorded
+// before the wallet opens (localStorage, so it survives a reload too);
+// when the tab becomes visible or focused again, the page re-reads the
+// chain and resolves the message to a confirmation when the action
+// landed, or to a clear not-confirmed message when it did not. The
+// re-check is read-only and never sends a transaction. Mirrors the
+// create page's recheckPendingOnReturn.
+const PENDING_ACTION_KEY = "ownground-pending-action";
+const PENDING_ACTION_TTL_MS = 24 * 60 * 60 * 1000; // a day; older entries are stale
+let pendingActionToken = 0;
+let actionRecheckRunning = false;
+let lastActionRecheck = 0;
+
+function savePendingAction(p) {
+  try { localStorage.setItem(PENDING_ACTION_KEY, JSON.stringify(p)); } catch (_) { /* storage unavailable */ }
+}
+function loadPendingAction() {
+  try {
+    const raw = localStorage.getItem(PENDING_ACTION_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (_) { return null; }
+}
+function clearPendingAction() {
+  try { localStorage.removeItem(PENDING_ACTION_KEY); } catch (_) { /* storage unavailable */ }
+}
+// Clear only the action that just failed in the wallet, never a newer
+// one that replaced it while the wallet was open.
+function clearPendingActionIfToken(token) {
+  const p = loadPendingAction();
+  if (p && p.token === token) clearPendingAction();
+}
+
+// Check whether a pending action has landed onchain. Returns evidence
+// (an object) when it has, null when it has not or cannot be told yet.
+// Read-only: every check is a view call.
+async function verifyPendingAction(p) {
+  try {
+    if (p.action === "campaign") {
+      const c = await view("get_community", { community_id: p.communityId });
+      const known = p.expected.knownCampaignIds || [];
+      const candidates = known.length
+        ? (c.campaign_ids || []).filter((id) => known.indexOf(id) < 0)
+        : (c.campaign_ids || []);
+      for (const id of candidates) {
+        try {
+          const camp = await view("get_campaign", { campaign_id: id });
+          const deadlineDiff = (() => {
+            const a = BigInt(String(camp.deadline));
+            const b = BigInt(p.expected.deadlineNs);
+            return a > b ? a - b : b - a;
+          })();
+          if (camp.asset_name === p.expected.assetName &&
+              String(camp.target) === String(p.expected.targetYocto) &&
+              deadlineDiff <= 1000n) {
+            return { campaignId: id };
+          }
+        } catch (_) { /* one unreadable campaign is not proof of failure */ }
+      }
+      return null;
+    }
+    if (p.action === "contribute") {
+      const camp = await view("get_campaign", { campaign_id: p.campaignId });
+      const mine = (camp.contributors || []).find(([a]) => a === p.account);
+      if (mine && BigInt(mine[1]) >= BigInt(p.expected.myBefore) + BigInt(p.expected.amount)) return {};
+      return null;
+    }
+    if (p.action === "refund") {
+      const camp = await view("get_campaign", { campaign_id: p.campaignId });
+      const mine = (camp.contributors || []).find(([a]) => a === p.account);
+      if (!mine || BigInt(mine[1]) === 0n) return {};
+      return null;
+    }
+    if (p.action === "dao-proposal") {
+      const prop = await rpcViewCall(p.daoId, "get_proposal", { id: p.proposalId });
+      if (prop && (!p.description || prop.description === p.description)) return { proposal: prop };
+      return null;
+    }
+    if (p.action === "execute-amendment") {
+      const policies = await view("get_policies", { community_id: p.communityId });
+      const a = (policies.amendments || []).find((x) => Number(x.id) === Number(p.amendmentId));
+      if (a && a.status === "Executed") return {};
+      return null;
+    }
+  } catch (_) { return null; }
+  return null;
+}
+
+// Resolve a landed action into its local status element. The data
+// refresh (loadCommunity) runs first, so the element exists fresh.
+function confirmPendingAction(p, found) {
+  if (p.action === "campaign") {
+    campaignStatus("Campaign " + p.expected.assetName + " started and is open for contributions.");
+  } else if (p.action === "contribute") {
+    campStatus(p.campaignId, "Contribution of " + fmtYocto(p.expected.amount) + " NEAR confirmed.");
+  } else if (p.action === "refund") {
+    campStatus(p.campaignId, "Refund confirmed.");
+  } else if (p.action === "dao-proposal") {
+    localStatus(p.statusId, "DAO proposal " + p.proposalId + " created. Council members vote, then the DAO executes it.");
+    showProposalCreated(p.daoId, p.proposalId, p.description || "");
+  } else if (p.action === "execute-amendment") {
+    amendStatus("Amendment " + p.amendmentId + " executed. The new policy is in force.");
+  }
+}
+
+// Re-check a pending action when the user comes back to the tab after
+// signing in the wallet. Polls up to ~30s: the receipt may still be
+// finalizing. Read-only; never sends a transaction. If a newer action
+// started while this runs, it aborts without touching the new action's
+// status.
+async function recheckPendingAction() {
+  if (document.hidden) return;
+  if (actionRecheckRunning) return;
+  const now = Date.now();
+  if (now - lastActionRecheck < 10000) return;
+  const p = loadPendingAction();
+  if (!p || p.communityId !== communityId) return;
+  if (now - (p.savedAt || 0) > PENDING_ACTION_TTL_MS) { clearPendingAction(); return; }
+  lastActionRecheck = now;
+  actionRecheckRunning = true;
+  try {
+    const token = p.token;
+    let found = null;
+    for (let attempt = 0; attempt < 10 && !found; attempt++) {
+      found = await verifyPendingAction(p);
+      if (found) break;
+      const current = loadPendingAction();
+      if (!current || current.token !== token) return;
+      if (attempt < 9) await new Promise((r) => setTimeout(r, 3000));
+    }
+    const current = loadPendingAction();
+    if (!current || current.token !== token) return;
+    if (!found) {
+      clearPendingAction();
+      localStatus(p.statusId, "Could not confirm this onchain. The transaction may not have gone through. Check it on Nearblocks, or try again.");
+      return;
+    }
+    clearPendingAction();
+    await loadCommunity();
+    const after = loadPendingAction();
+    if (after) {
+      // A newer action started while the data refreshed. Leave its
+      // status alone; put its waiting message back in case the refresh
+      // rebuilt the element it lives in.
+      if (after.statusId && after.progressMsg) localStatus(after.statusId, after.progressMsg);
+      return;
+    }
+    confirmPendingAction(p, found);
+  } finally {
+    actionRecheckRunning = false;
+  }
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) recheckPendingAction(); });
+window.addEventListener("focus", () => { recheckPendingAction(); });
+
 // Read the list page's handoff, if the user just clicked through and
 // it is fresh. It only carries the header; the numbers still refresh live.
 function readCachedCommunity(id) {
@@ -286,6 +443,16 @@ async function createCampaign() {
   try { targetYocto = nearToYocto(target); } catch (e) { campaignStatus(e.message); return; }
   deadlineNs = BigInt(Date.parse(date + "T00:00:00Z")) * 1000000n;
   if (deadlineNs <= BigInt(Date.now()) * 1000000n) { campaignStatus("Pick a future deadline."); return; }
+  const campaignToken = ++pendingActionToken;
+  savePendingAction({
+    token: campaignToken, action: "campaign", communityId: communityId,
+    account: walletAccountId, statusId: "campaignStatus", progressMsg: "Starting the campaign…",
+    expected: {
+      assetName: name, targetYocto: targetYocto.toString(), deadlineNs: deadlineNs.toString(),
+      knownCampaignIds: community ? community.campaign_ids.slice() : [],
+    },
+    savedAt: Date.now(),
+  });
   try {
     campaignStatus("Starting the campaign…");
     // deadline is u64 in the contract, so it goes as a JSON number.
@@ -297,7 +464,7 @@ async function createCampaign() {
       community_id: communityId, asset_name: name, category: cat,
       target: targetYocto.toString(), deadline: Number(deadlineNs),
     }, "50000000000000000000000");
-  } catch (e) { campaignFailure(e); }
+  } catch (e) { clearPendingActionIfToken(campaignToken); campaignFailure(e); }
 }
 
 async function contribute(campaignId) {
@@ -308,18 +475,39 @@ async function contribute(campaignId) {
   // The contract takes the contribution from the attached deposit minus
   // the 0.01 NEAR storage deposit, so attach amount plus 0.01 NEAR.
   const deposit = amount + 10000000000000000000000n;
+  // Read the campaign first, so the return re-check can tell this
+  // contribution apart from any earlier one by the same wallet.
+  let myBefore = 0n;
+  try {
+    const camp = await view("get_campaign", { campaign_id: campaignId });
+    const mine = (camp.contributors || []).find(([a]) => a === walletAccountId);
+    if (mine) myBefore = BigInt(mine[1]);
+  } catch (_) { /* the re-check falls back to myBefore 0 */ }
+  const contributeToken = ++pendingActionToken;
+  savePendingAction({
+    token: contributeToken, action: "contribute", communityId: communityId, campaignId: campaignId,
+    account: walletAccountId, statusId: "campStatus-" + campaignId, progressMsg: "Contributing…",
+    expected: { amount: amount.toString(), myBefore: myBefore.toString() },
+    savedAt: Date.now(),
+  });
   try {
     campStatus(campaignId, "Contributing…");
     await walletCall(contractId(), "contribute", { campaign_id: campaignId }, deposit.toString());
-  } catch (e) { campFailure(campaignId, e); }
+  } catch (e) { clearPendingActionIfToken(contributeToken); campFailure(campaignId, e); }
 }
 
 async function refund(campaignId) {
   if (!needWallet((m) => campStatus(campaignId, m))) return;
+  const refundToken = ++pendingActionToken;
+  savePendingAction({
+    token: refundToken, action: "refund", communityId: communityId, campaignId: campaignId,
+    account: walletAccountId, statusId: "campStatus-" + campaignId, progressMsg: "Requesting a refund…",
+    expected: {}, savedAt: Date.now(),
+  });
   try {
     campStatus(campaignId, "Requesting a refund…");
     await walletCall(contractId(), "refund", { campaign_id: campaignId }, "10000000000000000000000");
-  } catch (e) { campFailure(campaignId, e); }
+  } catch (e) { clearPendingActionIfToken(refundToken); campFailure(campaignId, e); }
 }
 
 // Live total for the allocation editor: the proposal is blocked unless
@@ -346,6 +534,7 @@ async function acquireAsset(campaignId) {
   const allocation = readAllocations(campaignId);
   const check = validateAllocations(allocation, community.members);
   if (!check.ok) { acquireStatus(campaignId, check.error); return; }
+  const acquireToken = ++pendingActionToken;
   try {
     acquireStatus(campaignId, "Creating a DAO proposal to acquire the asset…");
     const id = await createDaoProposal(
@@ -353,14 +542,16 @@ async function acquireAsset(campaignId) {
       "Acquire the asset for campaign " + campaignId + " from " + seller,
       "acquire_asset",
       { campaign_id: campaignId, seller: seller, allocation: allocation },
-      "10000000000000000000000"
+      "10000000000000000000000",
+      { token: acquireToken, communityId: communityId, campaignId: campaignId, account: walletAccountId, statusId: "acquireStatus-" + campaignId, progressMsg: "Creating a DAO proposal to acquire the asset…" }
     );
     showProposalCreated(community.dao_id, id, "Acquire the asset for campaign " + campaignId + " from " + seller);
-  } catch (e) { acquireFailure(campaignId, e); }
+  } catch (e) { clearPendingActionIfToken(acquireToken); acquireFailure(campaignId, e); }
 }
 
 async function cancelCampaign(campaignId) {
   if (!needWallet((m) => campStatus(campaignId, m))) return;
+  const cancelToken = ++pendingActionToken;
   try {
     campStatus(campaignId, "Creating a DAO proposal to cancel the campaign…");
     const id = await createDaoProposal(
@@ -368,10 +559,11 @@ async function cancelCampaign(campaignId) {
       "Cancel campaign " + campaignId + " and refund every contributor",
       "cancel_campaign",
       { campaign_id: campaignId },
-      "10000000000000000000000"
+      "10000000000000000000000",
+      { token: cancelToken, communityId: communityId, campaignId: campaignId, account: walletAccountId, statusId: "campStatus-" + campaignId, progressMsg: "Creating a DAO proposal to cancel the campaign…" }
     );
     showProposalCreated(community.dao_id, id, "Cancel campaign " + campaignId + " and refund every contributor");
-  } catch (e) { campFailure(campaignId, e); }
+  } catch (e) { clearPendingActionIfToken(cancelToken); campFailure(campaignId, e); }
 }
 
 async function proposePolicy() {
@@ -382,6 +574,7 @@ async function proposePolicy() {
   const a = Number(el("polActivity").value);
   if ([m, t, mn, a].some((x) => Number.isNaN(x) || x < 0 || x > 100)) { policyStatus("Percents must be numbers between 0 and 100."); return; }
   if (m + t + mn !== 100) { policyStatus("Members, retention and maintenance must sum to 100."); return; }
+  const policyToken = ++pendingActionToken;
   try {
     policyStatus("Creating a DAO proposal for the distribution policy change…");
     const id = await createDaoProposal(
@@ -398,10 +591,11 @@ async function proposePolicy() {
           },
         },
       },
-      "10000000000000000000000"
+      "10000000000000000000000",
+      { token: policyToken, communityId: communityId, account: walletAccountId, statusId: "policyStatus", progressMsg: "Creating a DAO proposal for the distribution policy change…" }
     );
     showProposalCreated(community.dao_id, id, "Propose a distribution policy change for community " + communityId);
-  } catch (e) { policyFailure(e); }
+  } catch (e) { clearPendingActionIfToken(policyToken); policyFailure(e); }
 }
 
 async function proposeSpendingPolicy() {
@@ -413,6 +607,7 @@ async function proposeSpendingPolicy() {
   } catch (e) { spendingStatus(e.message); return; }
   const cats = el("spCats").value.split(",").map((s) => s.trim()).filter(Boolean);
   if (!cats.length) { spendingStatus("List at least one allowed category."); return; }
+  const spendingToken = ++pendingActionToken;
   try {
     spendingStatus("Creating a DAO proposal for the spending policy change…");
     const id = await createDaoProposal(
@@ -430,27 +625,35 @@ async function proposeSpendingPolicy() {
           },
         },
       },
-      "10000000000000000000000"
+      "10000000000000000000000",
+      { token: spendingToken, communityId: communityId, account: walletAccountId, statusId: "spendingStatus", progressMsg: "Creating a DAO proposal for the spending policy change…" }
     );
     showProposalCreated(community.dao_id, id, "Propose a spending policy change for community " + communityId);
-  } catch (e) { spendingFailure(e); }
+  } catch (e) { clearPendingActionIfToken(spendingToken); spendingFailure(e); }
 }
 
 // execute_policy_change is NOT DAO gated: the contract lets anyone call
 // it after the timelock, so this stays a direct member call.
 async function executeAmendment(id) {
   if (!needWallet(amendStatus)) return;
+  const amendToken = ++pendingActionToken;
+  savePendingAction({
+    token: amendToken, action: "execute-amendment", communityId: communityId, amendmentId: id,
+    account: walletAccountId, statusId: "amendStatus", progressMsg: "Executing the amendment…",
+    expected: {}, savedAt: Date.now(),
+  });
   try {
     amendStatus("Executing the amendment…");
     await walletCall(contractId(), "execute_policy_change", {
       community_id: communityId,
       amendment_id: id,
     }, "10000000000000000000000");
-  } catch (e) { amendFailure(e); }
+  } catch (e) { clearPendingActionIfToken(amendToken); amendFailure(e); }
 }
 
 async function cancelAmendment(id) {
   if (!needWallet(amendStatus)) return;
+  const cancelAmendToken = ++pendingActionToken;
   try {
     amendStatus("Creating a DAO proposal to cancel the amendment…");
     const pid = await createDaoProposal(
@@ -461,10 +664,11 @@ async function cancelAmendment(id) {
         community_id: communityId,
         amendment_id: id,
       },
-      "10000000000000000000000"
+      "10000000000000000000000",
+      { token: cancelAmendToken, communityId: communityId, account: walletAccountId, statusId: "amendStatus", progressMsg: "Creating a DAO proposal to cancel the amendment…" }
     );
     showProposalCreated(community.dao_id, pid, "Cancel policy amendment " + id + " for community " + communityId);
-  } catch (e) { amendFailure(e); }
+  } catch (e) { clearPendingActionIfToken(cancelAmendToken); amendFailure(e); }
 }
 
 window.owngroundWalletChanged = loadCommunity;

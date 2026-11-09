@@ -89,7 +89,11 @@
 <script src="community.js"></script>
 <script>
 initWallet();
-loadCommunity();
+// After the community data loads, re-check any wallet action that was
+// still pending when the user came back from the wallet tab (or when
+// the page reloaded). The visibilitychange/focus listeners in
+// community.js cover later returns.
+loadCommunity().then(() => { recheckPendingAction(); });
 </script>
 </body>
 </html>

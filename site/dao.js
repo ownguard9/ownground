@@ -129,10 +129,24 @@ function validateAllocations(allocations, members) {
 })(typeof window !== "undefined" ? window : (typeof globalThis !== "undefined" ? globalThis : null));
 
 // ---- Browser helpers (need common.js: walletCall, rpcViewCall) ----
-async function createDaoProposal(daoId, description, method, args, depositYocto) {
+// Create a DAO proposal and return its id. The optional pendingMeta
+// (from the community page only) records the pending action BEFORE the
+// wallet opens, so the page's return re-check can confirm it landed
+// after the user comes back from the wallet tab. On pages without a
+// pending-action tracker (the asset page) pendingMeta is omitted and
+// nothing is recorded; the typeof guard keeps this a no-op there.
+async function createDaoProposal(daoId, description, method, args, depositYocto, pendingMeta) {
   // Read the next proposal id BEFORE creating it, as in demo.mjs: a
   // read after add_proposal can return the stale pre-write count.
   const proposalId = Number(await rpcViewCall(daoId, "get_last_proposal_id", {}));
+  if (pendingMeta && typeof savePendingAction === "function") {
+    savePendingAction({
+      token: pendingMeta.token, action: "dao-proposal", communityId: pendingMeta.communityId,
+      campaignId: pendingMeta.campaignId || null, daoId: daoId, proposalId: proposalId,
+      description: description, account: pendingMeta.account,
+      statusId: pendingMeta.statusId, progressMsg: pendingMeta.progressMsg, savedAt: Date.now(),
+    });
+  }
   await walletCall(
     daoId,
     "add_proposal",
