@@ -13,7 +13,7 @@ mainnet parts.
 > `lagos-energy2.testnet`, all 17 demo steps green, `verify.mjs` 89/89
 > PASS (29 live state checks + 60 receipt checks). Not submitted yet.
 > The GitHub identity is ownguard9 and the repo is live at
-> github.com/ownguard9/ownguard. Everything below runs on NEAR testnet only.
+> github.com/ownguard9/ownground-. Everything below runs on NEAR testnet only.
 > The v1 contract `ownground.testnet` is superseded: it stays deployed
 > as-is but is no longer the live deployment, because the remediation
 > changed the state layout and there is no migrate method.
@@ -217,8 +217,9 @@ Trezu: Trezu (https://trezu.app) is a Sputnik-DAO-compatible treasury UI, but it
   the exact-sum invariant, DAO-only enforcement, revenue and
   attestation, disputes and bonds, policy amendments, circular
   farming, and the remediation fixes: transfer callbacks (a failed
-  acquire, expense, cancel or refund reverts so it can be retried;
-  claim-based refunds for cancelled campaigns), policy validation
+  acquire, expense or refund reverts so it can be retried;
+  cancelled-campaign refunds are claim-based, and a failed claim
+  leaves the claim open), policy validation
   (shares sum to 10000, activity_bp ≤ 10000, timelock and dispute
   window 60s–365d, expense categories capped), and epoch-safe
   disputes (suspend/restore touch only the entry's own epoch).

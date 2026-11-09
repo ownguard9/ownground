@@ -4,7 +4,7 @@
 window.BRAND_NAME = "OwnGround";
 
 // Public repo. The footer GitHub link reads this and nowhere else.
-window.REPO_URL = "https://github.com/ownguard9/ownguard";
+window.REPO_URL = "https://github.com/ownguard9/ownground-";
 
 // Contract address. v2 (remediation re-deploy) at ownground2.testnet.
 // v1 ownground.testnet is superseded — do not point the site at it.
