@@ -10,6 +10,8 @@ earns revenue from that asset, and distributes the earnings under an
 approved policy. One Rust contract, one static site, no backend, no
 mainnet parts.
 
+Built by the same person as [Agent's Ladder](https://github.com/ownguard9/ladder) — Isaac leads both projects.
+
 > Status: deployed to NEAR testnet and the live demo passed on the
 > v4 contract (2026-11-09): contract `ownground4.testnet`, DAO
 > `lagos-energy4.testnet`, all 19 demo steps green, `verify-v4.mjs`
