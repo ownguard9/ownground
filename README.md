@@ -35,6 +35,16 @@ once, passing all 19 steps. The run used community
 `lagos-energy-cooperative-6` (campaign `-c0`, asset `-a0`). The
 v3 contract holds three communities (`lagos-energy-cooperative-4`,
 `-5`, `fleet-cooperative`); the site lists only the v4 run now.
+The live v4 contract holds exactly two communities, and the live site
+lists exactly those two — nothing else. `lagos-energy-cooperative-6`
+is the demo above. `solar-cooperative` (Solar cooperative, shared
+solar power) is a real community: its panels were funded at 4 NEAR
+and the asset is acquired, but it has 0 NEAR realised revenue and
+0 NEAR distributed — acquired, no revenue yet, nothing to
+distribute. Oceanic and Fleet are not on the live site or the live
+contract: `oceanic-group` (the Park) lives only on the superseded
+v2 contract, and `fleet-cooperative` only on the superseded v3
+contract. Do not claim either as live.
 Deployment evidence: WASM SHA-256
 `d050536ee83abdb274684015661cdfde76892e565cc0f489e4b5a6735aa66364`
 (408,774 bytes, `cargo near build non-reproducible-wasm`), deploy

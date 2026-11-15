@@ -15,8 +15,12 @@ window.CONTRACT_ID = "ownground4.testnet";
 
 // Demo runs superseded by the receipt-verified run. The contract keeps
 // their history onchain, but the list shows only the live demo community.
-// The v4 contract holds only lagos-energy-cooperative-6; the older ids
-// are the v3/v2/v1 runs and stay hidden if they ever appear in the list.
+// The v4 contract holds two communities: lagos-energy-cooperative-6
+// (the demo) and solar-cooperative (live: panels funded and acquired,
+// 0 NEAR revenue, nothing distributed). The older ids are the
+// v3/v2/v1 runs and stay hidden if they ever appear in the list.
+// Oceanic (oceanic-group) and Fleet (fleet-cooperative) are NOT on v4:
+// they live only on the superseded v2 and v3 contracts.
 window.HIDDEN_COMMUNITIES = ["lagos-energy-cooperative", "lagos-energy-cooperative-2", "lagos-energy-cooperative-3", "lagos-energy-cooperative-4", "lagos-energy-cooperative-5"];
 
 // Showcase community, pinned at the top of the list: it shows the full
